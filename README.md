@@ -4,13 +4,22 @@
 
 ## 应用预览
 
-| 便签列表 | 待办便签 | 普通便签 |
-| :--: | :--: | :--: |
-| ![便签列表](images/1.note-list.jpg) | ![待办便签](images/2.check-list.jpg) | ![普通便签编辑](images/3.normal-note.jpg) |
+<p align="center">
+  <img src="./images/1.note-list.jpg" width="260" alt="便签列表" />
+  <img src="./images/2.check-list.jpg" width="260" alt="待办便签" />
+  <img src="./images/3.normal-note.jpg" width="260" alt="普通便签编辑" />
+</p>
+<p align="center">
+  <em>便签列表 · 待办便签 · 普通便签</em>
+</p>
 
-| 云端一键同步 | 加密备份导入导出 |
-| :--: | :--: |
-| ![云端同步](images/4.sync-from-cloud.jpg) | ![加密备份](images/5.backup.jpg) |
+<p align="center">
+  <img src="./images/4.sync-from-cloud.jpg" width="400" alt="云端同步" />
+  <img src="./images/5.backup.jpg" width="400" alt="加密备份" />
+</p>
+<p align="center">
+  <em>云端一键同步 · 加密备份导入导出</em>
+</p>
 
 ## 开发背景
 
@@ -43,7 +52,9 @@
 4. 点击该请求，在 **「标头 / Headers」** → **「请求标头 / Request Headers」** 里找到 **Cookie**；
 5. **完整复制** Cookie 的值（整段很长，需一次性全选复制）。
 
-![在 i.mi.com 开发者工具中获取 Cookie](images/0.get-cookie.jpg)
+<p align="center">
+  <img src="./images/0.get-cookie.jpg" width="600" alt="在 i.mi.com 开发者工具中获取 Cookie" />
+</p>
 
 > Cookie 相当于登录凭证，请勿发给他人。若提示同步失败，多为 Cookie 过期，请重新登录 i.mi.com 后再复制。
 
@@ -54,7 +65,9 @@
 3. 点击 **「开始同步全部便签」**；
 4. 等待完成：App 会先拉取云端便签列表，再逐条下载完整内容，之后便签会保存在**本地加密数据库**中，可离线查看与编辑。
 
-![MiNote 云同步界面](images/4.sync-from-cloud.jpg)
+<p align="center">
+  <img src="./images/4.sync-from-cloud.jpg" width="400" alt="MiNote 云同步界面" />
+</p>
 
 ### 2. 备份导出（换机前）
 

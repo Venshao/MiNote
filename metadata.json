@@ -1,0 +1,6 @@
+{
+  "name": "笔记",
+  "description": "兼容小米便签格式的便签APP，支持导入、导出和搜索",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,19 +1,34 @@
 package com.example.ui
 
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.data.NoteEntity
+import com.example.data.NoteImageCache
+import com.example.data.NoteImageDownloadResult
 import com.example.data.NoteRepository
 import com.example.data.XiaomiRichTextParser
 import com.example.security.NoteBackupCrypto
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
-class NoteViewModel(private val repository: NoteRepository) : ViewModel() {
+class NoteViewModel(
+    application: Application,
+    private val repository: NoteRepository
+) : AndroidViewModel(application) {
 
     private val _searchQuery = MutableStateFlow("")
     val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
@@ -160,13 +175,36 @@ class NoteViewModel(private val repository: NoteRepository) : ViewModel() {
         }
     }
 
+    /**
+     * 备份格式 v2：便签 + 按 fileId 索引的本地图片（Base64）。
+     * 兼容旧版纯 JSONArray。
+     */
     suspend fun getExportJsonString(): String {
         val list = repository.allNotes.first()
-        val jsonArray = JSONArray()
+        val notesArr = JSONArray()
+        val imagesObj = JSONObject()
+        val appContext = getApplication<Application>()
+
         list.forEach { note ->
-            jsonArray.put(note.toJsonObject())
+            notesArr.put(note.toJsonObject())
+            XiaomiRichTextParser.extractImageFileIds(note.snippet).forEach { fileId ->
+                if (imagesObj.has(fileId)) return@forEach
+                val file = NoteImageCache.findCachedFile(appContext, fileId) ?: return@forEach
+                val b64 = NoteImageCache.readBase64(appContext, fileId) ?: return@forEach
+                imagesObj.put(
+                    fileId,
+                    JSONObject()
+                        .put("fileName", file.name)
+                        .put("data", b64)
+                )
+            }
         }
-        return jsonArray.toString(4)
+
+        return JSONObject()
+            .put("format", BACKUP_FORMAT_V2)
+            .put("notes", notesArr)
+            .put("images", imagesObj)
+            .toString(4)
     }
 
     suspend fun importNotesFromJson(jsonString: String): Result<Int> {
@@ -175,15 +213,46 @@ class NoteViewModel(private val repository: NoteRepository) : ViewModel() {
             if (trimmed.isBlank()) {
                 return Result.failure(IllegalArgumentException("备份内容为空"))
             }
-            val jsonArray = JSONArray(trimmed)
+
+            val notesArr: JSONArray
+            val imagesObj: JSONObject?
+            if (trimmed.startsWith("{")) {
+                val root = JSONObject(trimmed)
+                notesArr = root.optJSONArray("notes")
+                    ?: return Result.failure(IllegalArgumentException("备份缺少 notes 字段"))
+                imagesObj = root.optJSONObject("images")
+            } else {
+                notesArr = JSONArray(trimmed)
+                imagesObj = null
+            }
+
+            val appContext = getApplication<Application>()
+            if (imagesObj != null) {
+                val keys = imagesObj.keys()
+                while (keys.hasNext()) {
+                    val fileId = keys.next()
+                    val item = imagesObj.optJSONObject(fileId) ?: continue
+                    val data = item.optString("data", "")
+                    if (data.isBlank()) continue
+                    NoteImageCache.saveBase64(
+                        appContext,
+                        fileId,
+                        data,
+                        item.optString("fileName").takeIf { it.isNotBlank() }
+                    )
+                }
+            }
+
             val tempNotes = buildList {
-                for (i in 0 until jsonArray.length()) {
-                    add(NoteEntity.fromJsonObject(jsonArray.getJSONObject(i)))
+                for (i in 0 until notesArr.length()) {
+                    add(NoteEntity.fromJsonObject(notesArr.getJSONObject(i)))
                 }
             }
             if (tempNotes.isNotEmpty()) {
                 repository.insertNotes(tempNotes)
+                tempNotes.forEach { markHydrated(it.id) }
             }
+            _imageCacheTick.value = _imageCacheTick.value + 1
             Result.success(tempNotes.size)
         } catch (e: Exception) {
             Result.failure(e)
@@ -207,7 +276,7 @@ class NoteViewModel(private val repository: NoteRepository) : ViewModel() {
                 }
                 else -> {
                     val text = fileBytes.toString(Charsets.UTF_8).trim()
-                    if (text.startsWith("[")) {
+                    if (text.startsWith("[") || text.startsWith("{")) {
                         text
                     } else {
                         return Result.failure(IllegalArgumentException("无法识别备份格式，请检查文件或密码"))
@@ -220,7 +289,8 @@ class NoteViewModel(private val repository: NoteRepository) : ViewModel() {
         }
     }
 
-    // --- Xiaomi Cloud Sync (list + details) ---
+    // --- Xiaomi Cloud Sync ---
+    // Cookie 只在同步时用；图片永久落盘后，打开便签只读本地缓存。
     enum class SyncPhase { FETCHING_LIST, FETCHING_DETAILS }
 
     sealed class SyncState {
@@ -232,12 +302,16 @@ class NoteViewModel(private val repository: NoteRepository) : ViewModel() {
             val successCount: Int,
             val failureCount: Int,
             val currentNoteTitle: String,
-            val listFetchedCount: Int = 0
+            val listFetchedCount: Int = 0,
+            val imagesCachedCount: Int = 0
         ) : SyncState()
         data class Success(
             val listCount: Int,
             val detailSuccessCount: Int,
-            val detailFailureCount: Int
+            val detailFailureCount: Int,
+            val imagesCachedCount: Int,
+            val remainingCount: Int,
+            val cookieExpired: Boolean
         ) : SyncState()
         data class Error(val message: String) : SyncState()
     }
@@ -245,16 +319,71 @@ class NoteViewModel(private val repository: NoteRepository) : ViewModel() {
     private val _syncState = MutableStateFlow<SyncState>(SyncState.Idle)
     val syncState: StateFlow<SyncState> = _syncState.asStateFlow()
 
+    private val _imageCacheTick = MutableStateFlow(0L)
+    val imageCacheTick: StateFlow<Long> = _imageCacheTick.asStateFlow()
+
     private var syncJob: kotlinx.coroutines.Job? = null
+
+    private fun syncPrefs() =
+        getApplication<Application>().getSharedPreferences("mi_sync_prefs", android.content.Context.MODE_PRIVATE)
+
+    private fun hydratedIds(): MutableSet<String> =
+        syncPrefs().getStringSet(PREF_HYDRATED_IDS, emptySet())?.toMutableSet() ?: mutableSetOf()
+
+    private fun saveHydratedIds(ids: Set<String>) {
+        syncPrefs().edit().putStringSet(PREF_HYDRATED_IDS, HashSet(ids)).apply()
+    }
+
+    private fun markHydrated(noteId: String) {
+        val ids = hydratedIds()
+        if (ids.add(noteId)) saveHydratedIds(ids)
+    }
+
+    private fun clearHydrated(noteId: String) {
+        val ids = hydratedIds()
+        if (ids.remove(noteId)) saveHydratedIds(ids)
+    }
 
     private fun buildMiCloudRequest(url: String, cookie: String): okhttp3.Request {
         return okhttp3.Request.Builder()
             .url(url)
             .header("Cookie", cookie)
-            .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36")
+            .header(
+                "User-Agent",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36"
+            )
             .header("Accept", "*/*")
             .header("Referer", "https://i.mi.com/note/h5")
             .build()
+    }
+
+    private fun collectImageFileIds(content: String, settingObj: JSONObject?): List<String> {
+        val ids = LinkedHashSet<String>()
+        ids.addAll(XiaomiRichTextParser.extractImageFileIds(content))
+        val dataArr = settingObj?.optJSONArray("data")
+        if (dataArr != null) {
+            for (i in 0 until dataArr.length()) {
+                val item = dataArr.optJSONObject(i) ?: continue
+                val mime = item.optString("mimeType", "")
+                val fileId = item.optString("fileId", "")
+                if (fileId.isNotBlank() && (mime.startsWith("image/") || mime.isBlank())) {
+                    ids.add(fileId)
+                }
+            }
+        }
+        return ids.toList()
+    }
+
+    private fun hasMissingImages(content: String): Boolean {
+        val appContext = getApplication<Application>()
+        return XiaomiRichTextParser.extractImageFileIds(content).any { !NoteImageCache.isCached(appContext, it) }
+    }
+
+    private fun isAuthErrorMessage(message: String): Boolean {
+        val m = message.lowercase()
+        return m.contains("cookie") || m.contains("login") || m.contains("登录") ||
+            m.contains("auth") || m.contains("未授权") || m.contains("过期") ||
+            m.contains("invalid") || m.contains("401") || m.contains("403")
     }
 
     private fun parseMiCloudResponse(bodyText: String): JSONObject {
@@ -285,6 +414,9 @@ class NoteViewModel(private val repository: NoteRepository) : ViewModel() {
 
             val request = buildMiCloudRequest(url, cleanCookie)
             client.newCall(request).execute().use { response ->
+                if (response.code == 401 || response.code == 403) {
+                    throw IllegalStateException("Cookie 已失效，请重新从浏览器复制")
+                }
                 if (!response.isSuccessful) {
                     throw IllegalStateException("获取便签列表失败 (HTTP ${response.code})")
                 }
@@ -302,19 +434,97 @@ class NoteViewModel(private val repository: NoteRepository) : ViewModel() {
                 syncTag = data.optString("syncTag", null).takeIf { it.isNotBlank() }
             }
 
-            if (!lastPage) kotlinx.coroutines.delay(250)
+            if (!lastPage) kotlinx.coroutines.delay(200)
         }
         return allNotes
     }
 
+    /** 合并列表数据：已补全正文的本地便签不被短摘要覆盖 */
+    private suspend fun mergeListNotes(cloudNotes: List<NoteEntity>) {
+        val hydrated = hydratedIds()
+        for (cloud in cloudNotes) {
+            val local = repository.getNoteById(cloud.id)
+            if (local == null) {
+                repository.insert(cloud)
+                continue
+            }
+            if (cloud.modifyDate > local.modifyDate) {
+                clearHydrated(cloud.id)
+                hydrated.remove(cloud.id)
+                repository.insert(cloud)
+            } else {
+                val keepLocalSnippet = hydrated.contains(local.id) ||
+                    local.snippet.length > cloud.snippet.length
+                repository.insert(
+                    local.copy(
+                        colorId = cloud.colorId,
+                        status = cloud.status,
+                        folderId = cloud.folderId,
+                        tag = cloud.tag,
+                        subject = cloud.subject.ifBlank { local.subject },
+                        alertDate = cloud.alertDate,
+                        stickyTime = if (cloud.stickyTime != 0L) cloud.stickyTime else local.stickyTime,
+                        themeId = if (cloud.themeId != 0) cloud.themeId else local.themeId,
+                        extraInfo = cloud.extraInfo.ifBlank { local.extraInfo },
+                        snippet = if (keepLocalSnippet) local.snippet else cloud.snippet
+                    )
+                )
+            }
+        }
+    }
+
+    private data class ImageBatchResult(
+        val newlyCached: Int,
+        val authExpired: Boolean
+    )
+
+    /** 同一便签内的多张图片并发下载（限流），落盘后按 fileId 展示 */
+    private suspend fun downloadMissingImagesConcurrent(
+        client: okhttp3.OkHttpClient,
+        cookie: String,
+        content: String,
+        settingObj: JSONObject?
+    ): ImageBatchResult = coroutineScope {
+        val fileIds = collectImageFileIds(content, settingObj)
+            .filter { !NoteImageCache.isCached(getApplication(), it) }
+        if (fileIds.isEmpty()) return@coroutineScope ImageBatchResult(0, false)
+
+        val appContext = getApplication<Application>()
+        val semaphore = Semaphore(IMAGE_DOWNLOAD_CONCURRENCY)
+        val newly = AtomicInteger(0)
+        val authExpired = AtomicBoolean(false)
+
+        fileIds.map { fileId ->
+            async(Dispatchers.IO) {
+                if (authExpired.get() || !isActive) return@async
+                semaphore.withPermit {
+                    if (authExpired.get()) return@withPermit
+                    when (NoteImageCache.downloadIfNeeded(appContext, client, cookie, fileId)) {
+                        NoteImageDownloadResult.Cached -> newly.incrementAndGet()
+                        NoteImageDownloadResult.Failed -> Unit
+                        NoteImageDownloadResult.AuthExpired -> authExpired.set(true)
+                    }
+                }
+            }
+        }.awaitAll()
+
+        ImageBatchResult(newly.get(), authExpired.get())
+    }
+
+    /**
+     * 同步：拉列表 → 逐条拉详情 → 遇图片则并发下载落盘。
+     * 图片永久本地缓存，之后按 fileId 展示，不再依赖 Cookie。
+     * 中途 Cookie 失效则停下，已缓存的图片仍可看；下次同步续传补缺。
+     */
     fun startCloudSync(cookie: String) {
         syncJob?.cancel()
-        syncJob = viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+        syncJob = viewModelScope.launch(Dispatchers.IO) {
             val cleanCookie = cookie.replace("\n", "").replace("\r", "").trim()
             if (cleanCookie.isBlank()) {
-                _syncState.value = SyncState.Error("请先粘贴 Cookie")
+                _syncState.value = SyncState.Error("请先粘贴 Cookie（只需一次，会保存在本地）")
                 return@launch
             }
+            syncPrefs().edit().putString(PREF_COOKIE, cleanCookie).apply()
 
             _syncState.value = SyncState.Syncing(
                 phase = SyncPhase.FETCHING_LIST,
@@ -327,7 +537,9 @@ class NoteViewModel(private val repository: NoteRepository) : ViewModel() {
 
             val client = okhttp3.OkHttpClient.Builder()
                 .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
-                .readTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+                .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                .followRedirects(true)
+                .followSslRedirects(true)
                 .build()
 
             val allNotes = try {
@@ -338,99 +550,155 @@ class NoteViewModel(private val repository: NoteRepository) : ViewModel() {
             }
 
             if (!isActive) return@launch
-
             if (allNotes.isEmpty()) {
                 _syncState.value = SyncState.Error("云端没有便签，或 Cookie 无权访问便签数据")
                 return@launch
             }
 
-            repository.insertNotes(allNotes)
+            mergeListNotes(allNotes)
 
-            _syncState.value = SyncState.Syncing(
-                phase = SyncPhase.FETCHING_DETAILS,
-                totalCount = allNotes.size,
-                currentProgress = 0,
-                successCount = 0,
-                failureCount = 0,
-                currentNoteTitle = "",
-                listFetchedCount = allNotes.size
-            )
+            // 首次/续传：未补全文或仍缺图片的便签
+            val pending = allNotes.mapNotNull { cloud ->
+                val local = repository.getNoteById(cloud.id) ?: cloud
+                if (!hydratedIds().contains(local.id) || hasMissingImages(local.snippet)) local else null
+            }
+
+            if (pending.isEmpty()) {
+                _imageCacheTick.value = _imageCacheTick.value + 1
+                _syncState.value = SyncState.Success(
+                    listCount = allNotes.size,
+                    detailSuccessCount = 0,
+                    detailFailureCount = 0,
+                    imagesCachedCount = 0,
+                    remainingCount = 0,
+                    cookieExpired = false
+                )
+                return@launch
+            }
 
             var success = 0
             var failure = 0
+            var imagesCached = 0
+            var cookieExpired = false
 
-            for ((index, note) in allNotes.withIndex()) {
-                if (!isActive) break
+            for ((index, note) in pending.withIndex()) {
+                if (!isActive || cookieExpired) break
 
                 val displayTitle = if (note.title.isNotBlank()) note.title else "未命名便签"
                 _syncState.value = SyncState.Syncing(
                     phase = SyncPhase.FETCHING_DETAILS,
-                    totalCount = allNotes.size,
+                    totalCount = pending.size,
                     currentProgress = index,
                     successCount = success,
                     failureCount = failure,
                     currentNoteTitle = displayTitle,
-                    listFetchedCount = allNotes.size
+                    listFetchedCount = allNotes.size,
+                    imagesCachedCount = imagesCached
                 )
 
                 try {
-                    val ts = System.currentTimeMillis()
-                    val url = "https://i.mi.com/note/note/${note.id}/?ts=$ts"
-                    val request = buildMiCloudRequest(url, cleanCookie)
+                    var working = repository.getNoteById(note.id) ?: note
+                    var settingObj: JSONObject? = null
+                    val needDetail = !hydratedIds().contains(working.id)
 
-                    client.newCall(request).execute().use { response ->
-                        if (!response.isSuccessful) {
-                            failure++
-                        } else {
+                    if (needDetail) {
+                        val ts = System.currentTimeMillis()
+                        val url = "https://i.mi.com/note/note/${working.id}/?ts=$ts"
+                        val request = buildMiCloudRequest(url, cleanCookie)
+                        client.newCall(request).execute().use { response ->
+                            if (response.code == 401 || response.code == 403) {
+                                cookieExpired = true
+                                return@use
+                            }
+                            if (!response.isSuccessful) {
+                                failure++
+                                return@use
+                            }
                             val bodyText = response.body?.string()
                             if (bodyText.isNullOrBlank()) {
                                 failure++
-                            } else {
+                                return@use
+                            }
+                            try {
                                 val json = parseMiCloudResponse(bodyText)
-                                val data = json.optJSONObject("data")
-                                val entry = data?.optJSONObject("entry")
-                                if (entry != null) {
-                                    val fullText = entry.optString("content", entry.optString("snippet", ""))
-                                    val modifyDate = entry.optLong("modifyDate", note.modifyDate)
-                                    val colorId = entry.optInt("colorId", note.colorId)
-                                    val status = entry.optString("status", note.status)
-                                    val extraInfoResponse = entry.optString("extraInfo", note.extraInfo)
-                                    val settingObj = entry.optJSONObject("setting")
-                                    val stickyTime = settingObj?.optLong("stickyTime", note.stickyTime) ?: note.stickyTime
-                                    val themeId = settingObj?.optInt("themeId", note.themeId) ?: note.themeId
-                                    val version = settingObj?.optInt("version", note.version) ?: note.version
-
-                                    repository.insert(
-                                        note.copy(
-                                            snippet = fullText,
-                                            modifyDate = modifyDate,
-                                            colorId = colorId,
-                                            status = status,
-                                            stickyTime = stickyTime,
-                                            themeId = themeId,
-                                            version = version,
-                                            extraInfo = extraInfoResponse
-                                        )
-                                    )
-                                    success++
+                                val entry = json.optJSONObject("data")?.optJSONObject("entry")
+                                if (entry == null) {
+                                    failure++
+                                    return@use
+                                }
+                                val fullText = entry.optString("content", entry.optString("snippet", ""))
+                                settingObj = entry.optJSONObject("setting")
+                                working = working.copy(
+                                    snippet = fullText,
+                                    modifyDate = entry.optLong("modifyDate", working.modifyDate),
+                                    colorId = entry.optInt("colorId", working.colorId),
+                                    status = entry.optString("status", working.status),
+                                    extraInfo = entry.optString("extraInfo", working.extraInfo),
+                                    stickyTime = settingObj?.optLong("stickyTime", working.stickyTime)
+                                        ?: working.stickyTime,
+                                    themeId = settingObj?.optInt("themeId", working.themeId)
+                                        ?: working.themeId,
+                                    version = settingObj?.optInt("version", working.version)
+                                        ?: working.version
+                                )
+                                repository.insert(working)
+                                markHydrated(working.id)
+                                if (_editingNote.value?.id == working.id) {
+                                    _editingNote.value = working
+                                }
+                            } catch (e: Exception) {
+                                if (isAuthErrorMessage(e.message.orEmpty())) {
+                                    cookieExpired = true
                                 } else {
                                     failure++
                                 }
+                                return@use
                             }
                         }
+                        if (cookieExpired) break
+                        if (!hydratedIds().contains(working.id) && settingObj == null) {
+                            // 详情失败已计入 failure
+                            continue
+                        }
                     }
+
+                    val imgResult = downloadMissingImagesConcurrent(
+                        client, cleanCookie, working.snippet, settingObj
+                    )
+                    imagesCached += imgResult.newlyCached
+                    if (imgResult.authExpired) {
+                        cookieExpired = true
+                        break
+                    }
+                    success++
                 } catch (e: Exception) {
+                    if (isAuthErrorMessage(e.message.orEmpty())) {
+                        cookieExpired = true
+                        break
+                    }
                     failure++
                 }
 
-                kotlinx.coroutines.delay(250)
+                kotlinx.coroutines.delay(150)
             }
 
+            var remaining = 0
+            for (cloud in allNotes) {
+                val local = repository.getNoteById(cloud.id) ?: continue
+                if (!hydratedIds().contains(local.id) || hasMissingImages(local.snippet)) {
+                    remaining++
+                }
+            }
+
+            _imageCacheTick.value = _imageCacheTick.value + 1
             if (isActive) {
                 _syncState.value = SyncState.Success(
                     listCount = allNotes.size,
                     detailSuccessCount = success,
-                    detailFailureCount = failure
+                    detailFailureCount = failure,
+                    imagesCachedCount = imagesCached,
+                    remainingCount = remaining,
+                    cookieExpired = cookieExpired
                 )
             }
         }
@@ -444,13 +712,28 @@ class NoteViewModel(private val repository: NoteRepository) : ViewModel() {
     fun resetSyncState() {
         _syncState.value = SyncState.Idle
     }
+
+    /** 本地插入/删除图片后刷新编辑页图片展示 */
+    fun notifyImageCacheChanged() {
+        _imageCacheTick.value = _imageCacheTick.value + 1
+    }
+
+    companion object {
+        private const val PREF_COOKIE = "pasted_cookie"
+        private const val PREF_HYDRATED_IDS = "hydrated_note_ids"
+        private const val BACKUP_FORMAT_V2 = "minote-backup-v2"
+        private const val IMAGE_DOWNLOAD_CONCURRENCY = 4
+    }
 }
 
-class NoteViewModelFactory(private val repository: NoteRepository) : ViewModelProvider.Factory {
+class NoteViewModelFactory(
+    private val application: Application,
+    private val repository: NoteRepository
+) : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         if (modelClass.isAssignableFrom(NoteViewModel::class.java)) {
             @Suppress("UNCHECKED_CAST")
-            return NoteViewModel(repository) as T
+            return NoteViewModel(application, repository) as T
         }
         throw IllegalArgumentException("Unknown ViewModel class")
     }

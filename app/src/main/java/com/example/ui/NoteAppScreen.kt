@@ -3,11 +3,11 @@ package com.example.ui
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedVisibility
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -20,54 +20,61 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.staggeredgrid.LazyStaggeredGridState
 import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
 import androidx.compose.foundation.lazy.staggeredgrid.items
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridState
-import androidx.compose.ui.text.style.TextDecoration
-import androidx.compose.ui.graphics.graphicsLayer
-import com.example.data.XiaomiRichTextParser
-import com.example.data.RichTextLine
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.input.key.*
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.key.*
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import android.view.KeyEvent as AndroidKeyEvent
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputConnection
+import android.view.inputmethod.InputConnectionWrapper
+import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.platform.InterceptPlatformTextInput
+import androidx.compose.ui.platform.PlatformTextInputMethodRequest
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.example.data.NoteEntity
+import com.example.data.NoteImageCache
+import com.example.data.RichTextLine
+import com.example.data.XiaomiRichTextParser
 import com.example.ui.theme.MiNoteColors
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -75,6 +82,9 @@ import java.util.*
 
 private const val NOTES_INITIAL_PAGE_SIZE = 20
 private const val NOTES_PAGE_SIZE = 20
+
+/** 空行占位：软键盘退格会删掉它并触发 onValueChange，从而能删掉图片上方的空行 */
+private const val EMPTY_LINE_ZWSP = "\u200B"
 
 @Composable
 fun NoteAppScreen(viewModel: NoteViewModel) {
@@ -256,6 +266,7 @@ fun NoteAppScreen(viewModel: NoteViewModel) {
             ) {
                 NoteEditorScreen(
                     note = activeNoteCopy,
+                    viewModel = viewModel,
                     onSave = { viewModel.saveActiveNote() },
                     onDismiss = { viewModel.discardOrCancelActiveNote() },
                     onDelete = { viewModel.deleteActiveNote() },
@@ -770,6 +781,7 @@ fun NoteCard(
 @Composable
 fun NoteEditorScreen(
     note: NoteEntity,
+    viewModel: NoteViewModel,
     onSave: () -> Unit,
     onDismiss: () -> Unit,
     onDelete: () -> Unit,
@@ -779,8 +791,12 @@ fun NoteEditorScreen(
     statusBarHeight: androidx.compose.ui.unit.Dp,
     navigationBarHeight: androidx.compose.ui.unit.Dp
 ) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val colorPack = MiNoteColors.getColor(note.colorId)
     val formattedDate = remember(note.modifyDate) { formatMiNoteDate(note.modifyDate) }
+    val imageCacheTick by viewModel.imageCacheTick.collectAsStateWithLifecycle()
+    var insertingImage by remember { mutableStateOf(false) }
 
     // Prevent exiting the app, save note instead when backing out of the editor screen
     BackHandler(enabled = true) {
@@ -804,6 +820,96 @@ fun NoteEditorScreen(
     var activeFocusId by remember { mutableStateOf<String?>(null) }
     val focusRequesters = remember { mutableMapOf<String, FocusRequester>() }
     var focusNewLineId by remember { mutableStateOf<String?>(null) }
+
+    fun persistLines() {
+        onUpdateSnippetAndTitle(XiaomiRichTextParser.toRichTextFromLines(linesState), titleDraft)
+    }
+
+    fun insertImageLine(fileId: String) {
+        val focusIndex = linesState.indexOfFirst { it.id == activeFocusId }
+        val insertAt = when {
+            focusIndex >= 0 -> focusIndex + 1
+            else -> linesState.size
+        }
+        val imageLine = RichTextLine(
+            isCheckbox = false,
+            checked = false,
+            text = "",
+            fileId = fileId
+        )
+        linesState.add(insertAt, imageLine)
+        // 图片后补一行空文本，方便继续输入
+        val needTrailingText = insertAt == linesState.lastIndex ||
+            linesState.getOrNull(insertAt + 1)?.isImage == true
+        if (needTrailingText) {
+            val textLine = RichTextLine(isCheckbox = false, checked = false, text = "")
+            linesState.add(insertAt + 1, textLine)
+            focusNewLineId = textLine.id
+        }
+        persistLines()
+        viewModel.notifyImageCacheChanged()
+    }
+
+    fun deleteImageAt(index: Int) {
+        if (index !in linesState.indices) return
+        val line = linesState[index]
+        if (!line.isImage) return
+        val fileId = line.fileId.orEmpty()
+        linesState.removeAt(index)
+        if (linesState.isEmpty()) {
+            linesState.add(RichTextLine(isCheckbox = false, checked = false, text = ""))
+        }
+        // 当前便签不再引用该 fileId 时清理本地缓存
+        val stillUsed = linesState.any { it.fileId == fileId }
+        if (!stillUsed && fileId.isNotBlank()) {
+            NoteImageCache.deleteCachedFile(context, fileId)
+        }
+        persistLines()
+        viewModel.notifyImageCacheChanged()
+    }
+
+    /** 删除空文本行（含图片上方的空行）；焦点落到最近的可编辑文本行 */
+    fun removeEmptyTextLineAt(index: Int): Boolean {
+        if (index !in linesState.indices) return false
+        val line = linesState[index]
+        if (line.isImage || line.text.isNotEmpty()) return false
+        if (linesState.size <= 1) return false
+
+        val focusId = linesState.take(index).lastOrNull { !it.isImage }?.id
+            ?: linesState.drop(index + 1).firstOrNull { !it.isImage }?.id
+
+        linesState.removeAt(index)
+
+        if (linesState.none { !it.isImage }) {
+            val placeholder = RichTextLine(isCheckbox = false, checked = false, text = "")
+            linesState.add(placeholder)
+            focusNewLineId = placeholder.id
+        } else if (focusId != null) {
+            focusNewLineId = focusId
+        }
+
+        persistLines()
+        return true
+    }
+
+    val pickImageLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        insertingImage = true
+        scope.launch {
+            val fileId = withContext(Dispatchers.IO) {
+                NoteImageCache.importFromUri(context, uri)
+            }
+            insertingImage = false
+            if (fileId == null) {
+                Toast.makeText(context, "图片导入失败", Toast.LENGTH_SHORT).show()
+            } else {
+                insertImageLine(fileId)
+                Toast.makeText(context, "已插入图片", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
 
     LaunchedEffect(focusNewLineId) {
         focusNewLineId?.let { id ->
@@ -964,11 +1070,13 @@ fun NoteEditorScreen(
                                 if (linesState.isNotEmpty()) {
                                     val targetIndex = linesState.indexOfFirst { it.id == activeFocusId }.coerceAtLeast(0)
                                     val currentLine = linesState[targetIndex]
-                                    linesState[targetIndex] = currentLine.copy(
-                                        isCheckbox = !currentLine.isCheckbox,
-                                        checked = false
-                                    )
-                                    onUpdateSnippetAndTitle(XiaomiRichTextParser.toRichTextFromLines(linesState), titleDraft)
+                                    if (!currentLine.isImage) {
+                                        linesState[targetIndex] = currentLine.copy(
+                                            isCheckbox = !currentLine.isCheckbox,
+                                            checked = false
+                                        )
+                                        onUpdateSnippetAndTitle(XiaomiRichTextParser.toRichTextFromLines(linesState), titleDraft)
+                                    }
                                 }
                             },
                             modifier = Modifier.size(44.dp)
@@ -986,10 +1094,12 @@ fun NoteEditorScreen(
                                 if (linesState.isNotEmpty()) {
                                     val targetIndex = linesState.indexOfFirst { it.id == activeFocusId }.coerceAtLeast(0)
                                     val currentLine = linesState[targetIndex]
-                                    linesState[targetIndex] = currentLine.copy(
-                                        isRightAligned = !currentLine.isRightAligned
-                                    )
-                                    onUpdateSnippetAndTitle(XiaomiRichTextParser.toRichTextFromLines(linesState), titleDraft)
+                                    if (!currentLine.isImage) {
+                                        linesState[targetIndex] = currentLine.copy(
+                                            isRightAligned = !currentLine.isRightAligned
+                                        )
+                                        onUpdateSnippetAndTitle(XiaomiRichTextParser.toRichTextFromLines(linesState), titleDraft)
+                                    }
                                 }
                             },
                             modifier = Modifier.size(44.dp)
@@ -1001,6 +1111,34 @@ fun NoteEditorScreen(
                                 contentDescription = "右对齐",
                                 tint = if (isRight) Color(0xFFFF6700) else colorPack.text.copy(alpha = 0.6f)
                             )
+                        }
+
+                        // 插入图片（本地 SHA1 作 fileId，格式对齐官方便签）
+                        IconButton(
+                            onClick = {
+                                if (insertingImage) return@IconButton
+                                pickImageLauncher.launch(
+                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                )
+                            },
+                            enabled = !insertingImage,
+                            modifier = Modifier
+                                .size(44.dp)
+                                .testTag("insert_image_button")
+                        ) {
+                            if (insertingImage) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(22.dp),
+                                    strokeWidth = 2.dp,
+                                    color = Color(0xFFFF6700)
+                                )
+                            } else {
+                                Icon(
+                                    imageVector = Icons.Default.Image,
+                                    contentDescription = "插入图片",
+                                    tint = colorPack.text.copy(alpha = 0.6f)
+                                )
+                            }
                         }
                     }
 
@@ -1111,159 +1249,173 @@ fun NoteEditorScreen(
                             indication = null
                         ) {
                             if (linesState.isNotEmpty()) {
-                                val lastLineId = linesState.last().id
-                                focusRequesters[lastLineId]?.requestFocus()
+                                val lastTextLine = linesState.lastOrNull { !it.isImage } ?: linesState.last()
+                                focusRequesters[lastTextLine.id]?.requestFocus()
                             }
                         }
                 ) {
                     linesState.forEachIndexed { index, line ->
                         key(line.id) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 4.dp)
-                            ) {
-                                if (line.isCheckbox) {
-                                    Box(
-                                        modifier = Modifier
-                                            .padding(top = 2.dp)
-                                            .size(22.dp)
-                                            .clip(RoundedCornerShape(6.dp))
-                                            .border(
-                                                1.5.dp,
-                                                MiNoteColors.ActionYellow,
-                                                RoundedCornerShape(6.dp)
-                                            )
-                                            .background(
-                                                if (line.checked) MiNoteColors.ActionYellow
-                                                else Color.Transparent
-                                            )
-                                            .clickable {
-                                                linesState[index] = line.copy(checked = !line.checked)
-                                                onUpdateSnippetAndTitle(XiaomiRichTextParser.toRichTextFromLines(linesState), titleDraft)
-                                            },
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        if (line.checked) {
-                                            Icon(
-                                                imageVector = Icons.Default.Check,
-                                                contentDescription = "已完成",
-                                                tint = Color.White,
-                                                modifier = Modifier.size(16.dp)
-                                            )
-                                        }
-                                    }
-                                    Spacer(modifier = Modifier.width(10.dp))
-                                }
-
-                                // The text field for this specific line
-                                BasicTextField(
-                                    value = line.text,
-                                    onValueChange = { newText ->
-                                        val hasNewline = newText.contains('\n')
-                                        if (hasNewline) {
-                                            // Split line at newline
-                                            val parts = newText.split('\n')
-                                            val firstPart = parts.getOrNull(0) ?: ""
-                                            val secondPart = parts.getOrNull(1) ?: ""
-                                            
-                                            // Update active line with first part
-                                            linesState[index] = line.copy(text = firstPart)
-                                            
-                                            // Create a new line that inherits current line's checkbox configuration
-                                            val newLine = RichTextLine(
-                                                isCheckbox = line.isCheckbox,
-                                                checked = false,
-                                                text = secondPart,
-                                                isRightAligned = line.isRightAligned
-                                            )
-                                            linesState.add(index + 1, newLine)
-                                            
-                                            onUpdateSnippetAndTitle(XiaomiRichTextParser.toRichTextFromLines(linesState), titleDraft)
-                                            
-                                            // Auto-focus next line
-                                            focusNewLineId = newLine.id
-                                        } else {
-                                            linesState[index] = line.copy(text = newText)
-                                            onUpdateSnippetAndTitle(XiaomiRichTextParser.toRichTextFromLines(linesState), titleDraft)
-                                        }
-                                    },
+                            if (line.isImage) {
+                                NoteImageLine(
+                                    fileId = line.fileId.orEmpty(),
+                                    imageCacheTick = imageCacheTick,
+                                    borderColor = colorPack.border,
+                                    textColor = colorPack.text,
+                                    onDelete = { deleteImageAt(index) }
+                                )
+                            } else {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
                                     modifier = Modifier
-                                        .weight(1f)
-                                        .focusRequester(focusRequesters.getOrPut(line.id) { FocusRequester() })
-                                        .onFocusChanged { state ->
-                                            if (state.isFocused) {
-                                                activeFocusId = line.id
+                                        .fillMaxWidth()
+                                        .padding(vertical = 4.dp)
+                                ) {
+                                    if (line.isCheckbox) {
+                                        Box(
+                                            modifier = Modifier
+                                                .padding(top = 2.dp)
+                                                .size(22.dp)
+                                                .clip(RoundedCornerShape(6.dp))
+                                                .border(
+                                                    1.5.dp,
+                                                    MiNoteColors.ActionYellow,
+                                                    RoundedCornerShape(6.dp)
+                                                )
+                                                .background(
+                                                    if (line.checked) MiNoteColors.ActionYellow
+                                                    else Color.Transparent
+                                                )
+                                                .clickable {
+                                                    linesState[index] = line.copy(checked = !line.checked)
+                                                    onUpdateSnippetAndTitle(XiaomiRichTextParser.toRichTextFromLines(linesState), titleDraft)
+                                                },
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            if (line.checked) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Check,
+                                                    contentDescription = "已完成",
+                                                    tint = Color.White,
+                                                    modifier = Modifier.size(16.dp)
+                                                )
                                             }
                                         }
-                                        .onKeyEvent { keyEvent ->
-                                            if (keyEvent.type == KeyEventType.KeyDown && keyEvent.key == Key.Backspace) {
-                                                if (line.text.isEmpty()) {
-                                                    if (line.isCheckbox) {
-                                                        linesState[index] = line.copy(isCheckbox = false)
-                                                        onUpdateSnippetAndTitle(XiaomiRichTextParser.toRichTextFromLines(linesState), titleDraft)
-                                                        true
-                                                    } else if (index > 0) {
-                                                        val prevLine = linesState[index - 1]
-                                                        linesState.removeAt(index)
-                                                        focusNewLineId = prevLine.id
-                                                        onUpdateSnippetAndTitle(XiaomiRichTextParser.toRichTextFromLines(linesState), titleDraft)
-                                                        true
+                                        Spacer(modifier = Modifier.width(10.dp))
+                                    }
+
+                                    // 用真实空串 + 拦截 IME deleteSurroundingText：软键盘退格才能删掉图片上方空行
+                                    var fieldValue by remember(line.id) {
+                                        mutableStateOf(TextFieldValue(line.text, TextRange(line.text.length)))
+                                    }
+                                    LaunchedEffect(line.text) {
+                                        if (fieldValue.text != line.text) {
+                                            fieldValue = TextFieldValue(line.text, TextRange(line.text.length))
+                                        }
+                                    }
+
+                                    fun handleEmptyLineBackspace(): Boolean {
+                                        return if (line.isCheckbox) {
+                                            linesState[index] = line.copy(isCheckbox = false)
+                                            persistLines()
+                                            true
+                                        } else {
+                                            removeEmptyTextLineAt(index)
+                                        }
+                                    }
+
+                                    SoftBackspaceOnEmptyInterceptor(
+                                        enabled = line.text.isEmpty(),
+                                        onBackspaceOnEmpty = { handleEmptyLineBackspace() }
+                                    ) {
+                                        BasicTextField(
+                                            value = fieldValue,
+                                            onValueChange = { incoming ->
+                                                // ZWSP 或被删成空：空行上的退格
+                                                val stripped = incoming.text.replace(EMPTY_LINE_ZWSP, "")
+                                                if (stripped.isEmpty() && line.text.isEmpty()) {
+                                                    handleEmptyLineBackspace()
+                                                    return@BasicTextField
+                                                }
+
+                                                val newText = stripped
+                                                val hasNewline = newText.contains('\n')
+                                                if (hasNewline) {
+                                                    val parts = newText.split('\n')
+                                                    val firstPart = parts.getOrNull(0) ?: ""
+                                                    val secondPart = parts.getOrNull(1) ?: ""
+                                                    linesState[index] = line.copy(text = firstPart)
+                                                    fieldValue = TextFieldValue(firstPart, TextRange(firstPart.length))
+                                                    val newLine = RichTextLine(
+                                                        isCheckbox = line.isCheckbox,
+                                                        checked = false,
+                                                        text = secondPart,
+                                                        isRightAligned = line.isRightAligned
+                                                    )
+                                                    linesState.add(index + 1, newLine)
+                                                    persistLines()
+                                                    focusNewLineId = newLine.id
+                                                } else {
+                                                    linesState[index] = line.copy(text = newText)
+                                                    val sel = incoming.selection.start.coerceIn(0, newText.length)
+                                                    fieldValue = TextFieldValue(newText, TextRange(sel))
+                                                    persistLines()
+                                                }
+                                            },
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .focusRequester(focusRequesters.getOrPut(line.id) { FocusRequester() })
+                                                .onFocusChanged { state ->
+                                                    if (state.isFocused) {
+                                                        activeFocusId = line.id
+                                                    }
+                                                }
+                                                .onKeyEvent { keyEvent ->
+                                                    if (keyEvent.type == KeyEventType.KeyDown &&
+                                                        keyEvent.key == Key.Backspace &&
+                                                        line.text.isEmpty()
+                                                    ) {
+                                                        handleEmptyLineBackspace()
                                                     } else {
                                                         false
                                                     }
-                                                } else {
-                                                    false
                                                 }
-                                            } else {
-                                                false
-                                            }
-                                        }
-                                        .testTag("note_line_input_$index"),
-                                    textStyle = TextStyle(
-                                        fontSize = 16.sp,
-                                        color = if (line.isCheckbox && line.checked) Color.Gray else colorPack.text,
-                                        textDecoration = if (line.isCheckbox && line.checked) TextDecoration.LineThrough else TextDecoration.None,
-                                        lineHeight = 24.sp,
-                                        textAlign = if (line.isRightAligned) androidx.compose.ui.text.style.TextAlign.End else androidx.compose.ui.text.style.TextAlign.Start
-                                    ),
-                                    decorationBox = { innerTextField ->
-                                        if (line.text.isEmpty() && linesState.size == 1) {
-                                            Text(
-                                                text = "写下您的备忘或便签内容吧...",
+                                                .testTag("note_line_input_$index"),
+                                            textStyle = TextStyle(
                                                 fontSize = 16.sp,
-                                                color = colorPack.text.copy(alpha = 0.25f)
+                                                color = if (line.isCheckbox && line.checked) Color.Gray else colorPack.text,
+                                                textDecoration = if (line.isCheckbox && line.checked) TextDecoration.LineThrough else TextDecoration.None,
+                                                lineHeight = 24.sp,
+                                                textAlign = if (line.isRightAligned) androidx.compose.ui.text.style.TextAlign.End else androidx.compose.ui.text.style.TextAlign.Start
+                                            ),
+                                            decorationBox = { innerTextField ->
+                                                if (line.text.isEmpty() && linesState.none { !it.isImage && it.text.isNotEmpty() } && linesState.count { !it.isImage } <= 1) {
+                                                    Text(
+                                                        text = "写下您的备忘或便签内容吧...",
+                                                        fontSize = 16.sp,
+                                                        color = colorPack.text.copy(alpha = 0.25f)
+                                                    )
+                                                }
+                                                innerTextField()
+                                            }
+                                        )
+                                    }
+
+                                    if (line.isCheckbox) {
+                                        IconButton(
+                                            onClick = {
+                                                linesState[index] = line.copy(isCheckbox = false)
+                                                persistLines()
+                                            },
+                                            modifier = Modifier.size(36.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Close,
+                                                contentDescription = "取消待办",
+                                                tint = colorPack.text.copy(alpha = 0.3f),
+                                                modifier = Modifier.size(16.dp)
                                             )
                                         }
-                                        innerTextField()
-                                    }
-                                )
-
-                                // Fast checklist line deletion button
-                                if (line.isCheckbox) {
-                                    IconButton(
-                                        onClick = {
-                                            if (line.text.isEmpty()) {
-                                                if (linesState.size > 1) {
-                                                    linesState.removeAt(index)
-                                                    focusNewLineId = linesState[(index - 1).coerceAtLeast(0)].id
-                                                } else {
-                                                    linesState[index] = line.copy(isCheckbox = false)
-                                                }
-                                            } else {
-                                                linesState[index] = line.copy(isCheckbox = false)
-                                            }
-                                            onUpdateSnippetAndTitle(XiaomiRichTextParser.toRichTextFromLines(linesState), titleDraft)
-                                        },
-                                        modifier = Modifier.size(36.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Close,
-                                            contentDescription = "删除待办",
-                                            tint = colorPack.text.copy(alpha = 0.3f),
-                                            modifier = Modifier.size(16.dp)
-                                        )
                                     }
                                 }
                             }
@@ -1271,6 +1423,139 @@ fun NoteEditorScreen(
                     }
                 }
             }
+        }
+    }
+}
+
+/**
+ * 软键盘在空 TextField 上按退格时通常不会触发 onValueChange / onKeyEvent，
+ * 这里拦截 IME 的 deleteSurroundingText / DEL，才能删掉图片上方的空行。
+ */
+@OptIn(ExperimentalComposeUiApi::class)
+@Composable
+private fun SoftBackspaceOnEmptyInterceptor(
+    enabled: Boolean,
+    onBackspaceOnEmpty: () -> Boolean,
+    content: @Composable () -> Unit
+) {
+    InterceptPlatformTextInput(
+        interceptor = { request, nextHandler ->
+            nextHandler.startInputMethod(
+                object : PlatformTextInputMethodRequest {
+                    override fun createInputConnection(outAttributes: EditorInfo): InputConnection {
+                        val real = request.createInputConnection(outAttributes)
+                        return object : InputConnectionWrapper(real, true) {
+                            private fun tryConsumeEmptyBackspace(): Boolean {
+                                return enabled && onBackspaceOnEmpty()
+                            }
+
+                            override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
+                                if (beforeLength > 0 && tryConsumeEmptyBackspace()) return true
+                                return super.deleteSurroundingText(beforeLength, afterLength)
+                            }
+
+                            override fun deleteSurroundingTextInCodePoints(
+                                beforeLength: Int,
+                                afterLength: Int
+                            ): Boolean {
+                                if (beforeLength > 0 && tryConsumeEmptyBackspace()) return true
+                                return super.deleteSurroundingTextInCodePoints(beforeLength, afterLength)
+                            }
+
+                            override fun sendKeyEvent(event: AndroidKeyEvent): Boolean {
+                                if (event.action == AndroidKeyEvent.ACTION_DOWN &&
+                                    event.keyCode == AndroidKeyEvent.KEYCODE_DEL &&
+                                    tryConsumeEmptyBackspace()
+                                ) {
+                                    return true
+                                }
+                                return super.sendKeyEvent(event)
+                            }
+                        }
+                    }
+                }
+            )
+        },
+        content = content
+    )
+}
+
+@Composable
+private fun NoteImageLine(
+    fileId: String,
+    imageCacheTick: Long,
+    borderColor: Color,
+    textColor: Color,
+    onDelete: () -> Unit
+) {
+    val context = LocalContext.current
+    val cachedFile = remember(fileId, imageCacheTick) {
+        NoteImageCache.findCachedFile(context, fileId)
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .border(BorderStroke(1.dp, borderColor.copy(alpha = 0.55f)), RoundedCornerShape(12.dp))
+            .background(Color.White.copy(alpha = 0.35f))
+            .testTag("note_image_$fileId")
+    ) {
+        if (cachedFile != null) {
+            AsyncImage(
+                model = ImageRequest.Builder(context)
+                    .data(cachedFile)
+                    .crossfade(true)
+                    .build(),
+                contentDescription = "便签图片",
+                contentScale = ContentScale.FillWidth,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 120.dp, max = 420.dp)
+                    .clip(RoundedCornerShape(12.dp))
+            )
+        } else {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 28.dp, horizontal = 16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Image,
+                    contentDescription = null,
+                    tint = textColor.copy(alpha = 0.35f),
+                    modifier = Modifier.size(36.dp)
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "图片未缓存\n请在「同步」中用 Cookie 拉取后即可离线查看",
+                    fontSize = 12.sp,
+                    color = textColor.copy(alpha = 0.45f),
+                    lineHeight = 18.sp
+                )
+            }
+        }
+
+        IconButton(
+            onClick = onDelete,
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(4.dp)
+                .size(36.dp)
+                .testTag("delete_image_$fileId")
+        ) {
+            Icon(
+                imageVector = Icons.Default.Close,
+                contentDescription = "删除图片",
+                tint = Color.White,
+                modifier = Modifier
+                    .size(22.dp)
+                    .clip(CircleShape)
+                    .background(Color.Black.copy(alpha = 0.45f))
+                    .padding(3.dp)
+            )
         }
     }
 }
@@ -1413,7 +1698,7 @@ fun CloudSyncDialog(
                     val syncState by viewModel.syncState.collectAsStateWithLifecycle()
 
                     Text(
-                        text = "粘贴浏览器登录 i.mi.com 后抓包得到的 Cookie，即可自动拉取云端便签列表并补全每条便签的完整内容。",
+                        text = "粘贴一次 Cookie 即可：先同步列表，再拉详情；遇到图片会并发下载到本地。之后打开便签按图片 ID 读本地缓存，不依赖 Cookie。",
                         fontSize = 13.sp,
                         color = Color(0xFF44474E),
                         lineHeight = 18.sp
@@ -1492,7 +1777,11 @@ fun CloudSyncDialog(
                                         .padding(14.dp)
                                 ) {
                                     Text(
-                                        text = if (isFetchingList) "正在获取云端便签列表..." else "正在同步便签详情 (请勿关闭窗口)...",
+                                        text = if (isFetchingList) {
+                                            "正在获取云端便签列表..."
+                                        } else {
+                                            "正在拉取详情并并发缓存图片..."
+                                        },
                                         fontSize = 13.sp,
                                         fontWeight = FontWeight.Bold,
                                         color = Color(0xFFFF6700)
@@ -1513,7 +1802,7 @@ fun CloudSyncDialog(
                                             state.currentProgress.toFloat() / state.totalCount.toFloat()
                                         } else 0f
                                         LinearProgressIndicator(
-                                            progress = progress,
+                                            progress = { progress },
                                             modifier = Modifier
                                                 .fillMaxWidth()
                                                 .height(6.dp)
@@ -1523,7 +1812,7 @@ fun CloudSyncDialog(
                                         )
                                         Spacer(modifier = Modifier.height(8.dp))
                                         Text(
-                                            text = "列表已拉取 ${state.listFetchedCount} 条 · 详情 ${state.currentProgress} / ${state.totalCount}",
+                                            text = "列表 ${state.listFetchedCount} 条 · 进度 ${state.currentProgress} / ${state.totalCount}",
                                             fontSize = 12.sp,
                                             color = Color(0xFF1C1B1F)
                                         )
@@ -1536,7 +1825,7 @@ fun CloudSyncDialog(
                                         )
                                         Spacer(modifier = Modifier.height(4.dp))
                                         Text(
-                                            text = "详情成功: ${state.successCount} | 失败: ${state.failureCount}",
+                                            text = "成功 ${state.successCount} · 失败 ${state.failureCount} · 新缓存图片 ${state.imagesCachedCount}",
                                             fontSize = 12.sp,
                                             fontWeight = FontWeight.Bold,
                                             color = Color(0xFF44474E)
@@ -1579,15 +1868,23 @@ fun CloudSyncDialog(
                                     }
                                     Spacer(modifier = Modifier.height(8.dp))
                                     Text(
-                                        text = "列表同步: ${state.listCount} 条便签",
+                                        text = "列表 ${state.listCount} 条 · 本轮处理 ${state.detailSuccessCount} · 失败 ${state.detailFailureCount}",
                                         fontSize = 13.sp,
                                         color = Color(0xFF155724)
                                     )
                                     Text(
-                                        text = "详情成功: ${state.detailSuccessCount} · 失败: ${state.detailFailureCount}",
+                                        text = "新缓存图片 ${state.imagesCachedCount} 张 · 待续传 ${state.remainingCount} 条",
                                         fontSize = 12.sp,
                                         color = Color(0xFF6C757D)
                                     )
+                                    if (state.cookieExpired) {
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Text(
+                                            text = "Cookie 已失效，已缓存的图片仍可离线查看。更新 Cookie 后再同步即可续传。",
+                                            fontSize = 12.sp,
+                                            color = Color(0xFF856404)
+                                        )
+                                    }
                                 }
                             }
 

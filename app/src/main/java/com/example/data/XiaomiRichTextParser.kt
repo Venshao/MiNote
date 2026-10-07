@@ -5,14 +5,19 @@ data class RichTextLine(
     val isCheckbox: Boolean,
     val checked: Boolean,
     val text: String,
-    val isRightAligned: Boolean = false
-)
+    val isRightAligned: Boolean = false,
+    /** 非空表示该行为云端图片（content 中的 &lt;img fileid=... /&gt;） */
+    val fileId: String? = null
+) {
+    val isImage: Boolean get() = !fileId.isNullOrBlank()
+}
 
 /** 列表卡片预览用的轻量行（不生成 UUID，只解析前几行） */
 data class NotePreviewLine(
     val text: String,
     val isCheckbox: Boolean = false,
-    val checked: Boolean = false
+    val checked: Boolean = false,
+    val isImage: Boolean = false
 )
 
 data class NoteCardPreview(
@@ -23,38 +28,39 @@ data class NoteCardPreview(
 )
 
 object XiaomiRichTextParser {
+    private val imgTagRegex = Regex(
+        """<img\b[^>]*\bfileid\s*=\s*"([^"]+)"[^>]*/?>""",
+        RegexOption.IGNORE_CASE
+    )
+
     /**
-     * Parse rich text content containing <text indent="X">...</text> or <input type="checkbox"... /> tags into a list of lines.
+     * Parse rich text content containing &lt;text&gt;, checkbox, or &lt;img fileid&gt; tags.
      */
     fun parse(richText: String): List<RichTextLine> {
         if (richText.isBlank()) return emptyList()
         val lines = richText.split("\n")
         return lines.map { line ->
             val trimmed = line.trim()
-            if (trimmed.startsWith("<input") && trimmed.contains("type=\"checkbox\"")) {
+            val imgMatch = imgTagRegex.find(trimmed)
+            if (imgMatch != null && trimmed.startsWith("<img", ignoreCase = true)) {
+                RichTextLine(
+                    isCheckbox = false,
+                    checked = false,
+                    text = "",
+                    fileId = imgMatch.groupValues[1]
+                )
+            } else if (trimmed.startsWith("<input") && trimmed.contains("type=\"checkbox\"")) {
                 val isChecked = trimmed.contains("checked=\"true\"")
-                // Extract everything after '/>'
                 val closingIdx = trimmed.indexOf("/>")
                 val content = if (closingIdx != -1) {
                     trimmed.substring(closingIdx + 2)
                 } else {
                     trimmed
                 }
-                
-                // Let's check for <right> tag inside raw content
+
                 val hasRight = content.contains("<right>") && content.contains("</right>")
-                val textWithNoRight = if (hasRight) {
-                    val rs = content.indexOf("<right>")
-                    val re = content.lastIndexOf("</right>")
-                    if (re > rs) {
-                        content.substring(rs + 7, re)
-                    } else {
-                        content.replace("<right>", "").replace("</right>", "")
-                    }
-                } else {
-                    content
-                }
-                
+                val textWithNoRight = extractRightInner(content, hasRight)
+
                 RichTextLine(
                     isCheckbox = true,
                     checked = isChecked,
@@ -71,21 +77,10 @@ object XiaomiRichTextParser {
                 } else {
                     trimmed
                 }
-                
-                // Let's check for <right> tag inside raw content
+
                 val hasRight = content.contains("<right>") && content.contains("</right>")
-                val textWithNoRight = if (hasRight) {
-                    val rs = content.indexOf("<right>")
-                    val re = content.lastIndexOf("</right>")
-                    if (re > rs) {
-                        content.substring(rs + 7, re)
-                    } else {
-                        content.replace("<right>", "").replace("</right>", "")
-                    }
-                } else {
-                    content
-                }
-                
+                val textWithNoRight = extractRightInner(content, hasRight)
+
                 RichTextLine(
                     isCheckbox = false,
                     checked = false,
@@ -94,17 +89,7 @@ object XiaomiRichTextParser {
                 )
             } else {
                 val hasRight = line.contains("<right>") && line.contains("</right>")
-                val textWithNoRight = if (hasRight) {
-                    val rs = line.indexOf("<right>")
-                    val re = line.lastIndexOf("</right>")
-                    if (re > rs) {
-                        line.substring(rs + 7, re)
-                    } else {
-                        line.replace("<right>", "").replace("</right>", "")
-                    }
-                } else {
-                    line
-                }
+                val textWithNoRight = extractRightInner(line, hasRight)
                 RichTextLine(
                     isCheckbox = false,
                     checked = false,
@@ -115,18 +100,31 @@ object XiaomiRichTextParser {
         }
     }
 
+    fun extractImageFileIds(richText: String): List<String> {
+        if (richText.isBlank()) return emptyList()
+        return imgTagRegex.findAll(richText)
+            .map { it.groupValues[1] }
+            .filter { it.isNotBlank() }
+            .distinct()
+            .toList()
+    }
+
     /**
      * Map a standard representation of parsed lines back to the Xiaomi rich-text XML tagged format.
      */
     fun toRichTextFromLines(lines: List<RichTextLine>): String {
         return lines.joinToString("\n") { line ->
-            val escapedText = escape(line.text)
-            val wrappedText = if (line.isRightAligned) "<right>$escapedText</right>" else escapedText
-            if (line.isCheckbox) {
-                val checkedAttr = if (line.checked) " checked=\"true\"" else ""
-                "<input type=\"checkbox\"$checkedAttr indent=\"1\" level=\"3\" />$wrappedText"
+            if (line.isImage) {
+                """<img fileid="${line.fileId}" imgshow="0" imgdes="" />"""
             } else {
-                "<text indent=\"1\">$wrappedText</text>"
+                val escapedText = escape(line.text)
+                val wrappedText = if (line.isRightAligned) "<right>$escapedText</right>" else escapedText
+                if (line.isCheckbox) {
+                    val checkedAttr = if (line.checked) " checked=\"true\"" else ""
+                    "<input type=\"checkbox\"$checkedAttr indent=\"1\" level=\"3\" />$wrappedText"
+                } else {
+                    "<text indent=\"1\">$wrappedText</text>"
+                }
             }
         }
     }
@@ -137,10 +135,11 @@ object XiaomiRichTextParser {
     fun toEditableText(richText: String): String {
         val parsed = parse(richText)
         return parsed.joinToString("\n") { line ->
-            if (line.isCheckbox) {
-                if (line.checked) "[x] ${line.text}" else "[ ] ${line.text}"
-            } else {
-                line.text
+            when {
+                line.isImage -> "[图片]"
+                line.isCheckbox && line.checked -> "[x] ${line.text}"
+                line.isCheckbox -> "[ ] ${line.text}"
+                else -> line.text
             }
         }
     }
@@ -167,7 +166,9 @@ object XiaomiRichTextParser {
      */
     fun toPlainText(richText: String): String {
         val parsed = parse(richText)
-        return parsed.joinToString("\n") { it.text }
+        return parsed.joinToString("\n") { line ->
+            if (line.isImage) "[图片]" else line.text
+        }
     }
 
     /**
@@ -185,15 +186,18 @@ object XiaomiRichTextParser {
 
         val parsed = parse(limitedSnippet).map { line ->
             NotePreviewLine(
-                text = line.text,
+                text = if (line.isImage) "[图片]" else line.text,
                 isCheckbox = line.isCheckbox,
-                checked = line.checked
+                checked = line.checked,
+                isImage = line.isImage
             )
         }
 
         val displayTitle = when {
             title.isNotBlank() -> title
-            else -> parsed.firstOrNull()?.text?.takeIf { it.isNotBlank() } ?: "无标题便签"
+            else -> parsed.firstOrNull { !it.isImage && it.text.isNotBlank() }?.text
+                ?: parsed.firstOrNull()?.text?.takeIf { it.isNotBlank() }
+                ?: "无标题便签"
         }
 
         val bodyLines = if (title.isBlank()) {
@@ -204,6 +208,7 @@ object XiaomiRichTextParser {
 
         val bodyText = bodyLines.joinToString("\n") { line ->
             when {
+                line.isImage -> "[图片]"
                 line.isCheckbox && line.checked -> "✓ ${line.text}"
                 line.isCheckbox -> "○ ${line.text}"
                 else -> line.text
@@ -211,6 +216,17 @@ object XiaomiRichTextParser {
         }
 
         return NoteCardPreview(displayTitle, bodyLines, bodyText)
+    }
+
+    private fun extractRightInner(content: String, hasRight: Boolean): String {
+        if (!hasRight) return content
+        val rs = content.indexOf("<right>")
+        val re = content.lastIndexOf("</right>")
+        return if (re > rs) {
+            content.substring(rs + 7, re)
+        } else {
+            content.replace("<right>", "").replace("</right>", "")
+        }
     }
 
     private fun escape(text: String): String {

@@ -28,7 +28,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             MyApplicationTheme {
                 val viewModel: NoteViewModel = viewModel(
-                    factory = NoteViewModelFactory(repository)
+                    factory = NoteViewModelFactory(application, repository)
                 )
                 Surface(
                     modifier = Modifier.fillMaxSize()

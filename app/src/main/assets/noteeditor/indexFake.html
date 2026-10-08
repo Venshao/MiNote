@@ -1,0 +1,279 @@
+<!doctype html>
+<!--
+  这是客户端要的一个方案，弄一个完全的假静态页面，先加载这个假页面，等真页面完毕再切过去
+  我提供给客户端的版本
+  估计不会被使用了，如果要被使用的话请注意main.xxxxxxx.chunk.css文件名的更改
+-->
+<html lang="zh">
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<meta name="theme-color" content="#000000" />
+<meta name="description" content="Web site created using create-react-app" />
+<link rel="icon" href="data:;base64,=">
+<link rel="preload" as="image" href="./mind_map.svg" type="image/svg+xml" />
+<title>小米笔记</title>
+<style>
+  html {
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif !important;
+    line-height: 1.5;
+    font-weight: 400;
+  }
+
+  html {
+    --theme-ui-colors-text: rgba(0, 0, 0, 0.87);
+    --theme-ui-colors-background: transparent;
+    --theme-ui-colors-primary: #07c;
+    --theme-ui-colors-secondary: #30c;
+    --theme-ui-colors-muted: #f6f6f6;
+    --theme-ui-colors-containerPadding: 0 24px 36px;
+    --theme-ui-colors-contentPadding: 0;
+    --theme-ui-colors-highlight: rgba(255, 221, 139, 0.6);
+    --theme-ui-colors-selectArea: rgba(255, 232, 175, 0.4);
+    --theme-ui-colors-soundBarBg: rgba(255, 249, 231, 1);
+    --theme-ui-colors-soundBarMain: rgba(255, 187, 0, 1);
+    --theme-ui-colors-soundBarBtnBg: rgba(255, 255, 255, 0.6);
+    --theme-ui-colors-soundBarBorder: rgba(255, 187, 0, 0.16);
+    --theme-ui-colors-checkBoxBg: rgba(255, 187, 0, 1);
+    --theme-ui-colors-checkBoxBorder: rgba(140, 147, 176, 1);
+    --theme-ui-colors-checkBoxText: rgba(0, 0, 0, 0.4);
+    --theme-ui-colors-checkBoxTick: rgba(255, 255, 255, 1);
+    --theme-ui-colors-linkCard: rgba(247, 247, 247, 1);
+    --theme-ui-colors-linkCardText: rgba(140, 147, 176, 1);
+    --theme-ui-colors-linkCardUrl: rgba(0, 0, 0, 0.4);
+    --theme-ui-colors-imgBorder: rgba(0, 0, 0, 0.08);
+    --theme-ui-colors-selectedBorder: rgba(255, 187, 0, 1);
+    color: var(--theme-ui-colors-text);
+    background-color: var(--theme-ui-colors-background);
+  }
+
+  html {
+    --main-color: #fb0;
+    --text-color: var(--theme-ui-colors-text);
+    --text-color-middle: var(--theme-ui-colors-text);
+    --text-color-large: var(--theme-ui-colors-text);
+    --text-color-selection: var(--theme-ui-colors-selectArea);
+    --checkbox-color-border: var(--theme-ui-colors-checkBoxBorder);
+    --checkbox-off-color-bg: transparent;
+    --checkbox-on-color-bg: var(--theme-ui-colors-checkBoxBg);
+    --checkbox-on-color-tick: var(--theme-ui-colors-checkBoxTick);
+    --checkbox-on-color-text: var(--theme-ui-colors-checkBoxText);
+    --voice-color-bg: var(--theme-ui-colors-soundBarBg);
+    --voice-color-main: var(--theme-ui-colors-soundBarMain);
+    --voice-fg-fade-opacity: 0.4;
+    --voice-btn-color-bg: var(--theme-ui-colors-soundBarBtnBg);
+    --voice-fg-color: var(--theme-ui-colors-soundBarMain);
+    --voice-border-color: var(--theme-ui-colors-soundBarBorder);
+    --voice-selected-border-color: var(--theme-ui-colors-selectedBorder);
+    --highlight-color-bg: var(--theme-ui-colors-highlight);
+    --match-pattern-color-text: #fb0;
+    --match-search-color-text: red;
+    --link-card-background: var(--theme-ui-colors-linkCard);
+    --link-card-text-color: var(--theme-ui-colors-linkCardText);
+    --link-card-url-color: var(--theme-ui-colors-linkCardUrl);
+    --link-card-logo-color: var(--theme-ui-colors-linkCardText);
+    --link-card-border-color: var(--theme-ui-colors-selectedBorder);
+    --image-selected-border-color: var(--theme-ui-colors-selectedBorder);
+    --image-border-color: var(--theme-ui-colors-background);
+  }
+</style>
+<style>
+  html {
+    font-size: 16px;
+    --font-weight-regalur: 400;
+    --font-weight-semibold: 660;
+  }
+
+  body {
+    margin: 0;
+  }
+</style>
+<link href="./static/css/main.a56920e5.chunk.css" rel="stylesheet">
+</head>
+<body>
+  <script>
+    function hackRich() {
+      // 对手机端进行些特殊优化，减少新建时候首屏时间
+      if (!window.rich_editor_interface) return;
+      if (!window.rich_editor_interface?.getStaticInfos) return;
+      const staticInfos = JSON.parse(
+        window.rich_editor_interface?.getStaticInfos() || "null",
+      );
+      if (
+        staticInfos &&
+        staticInfos.device_flag === 0 &&
+        staticInfos.isNoteCreated
+      ) {
+        const _tempInterface = window.rich_editor_interface;
+        window.rich_editor_interface = {
+          getStaticInfos: () => { return _tempInterface.getStaticInfos() },
+          STATIC_INFOS: staticInfos,
+          canCreateMindNote: (...args) => {
+            return _tempInterface.canCreateMindNote(...args);
+          },
+          getBaseUri: (...args) => {
+            return _tempInterface.getBaseUri(...args);
+          },
+          getContentLength: (...args) => {
+            return _tempInterface.getContentLength(...args);
+          },
+          getDeviceFlag: (...args) => {
+            return staticInfos.device_flag;
+            const result = _tempInterface.getDeviceFlag(...args);
+            return result;
+          },
+          getLocaleInfo: (...args) => {
+            return JSON.stringify({
+              locale: staticInfos.locale,
+              countryCode: staticInfos.countryCode,
+              isRtl: staticInfos.isRtl,
+            });
+            const result = _tempInterface.getLocaleInfo(...args);
+            return result;
+          },
+          getNumberAndStringFromResource: (...args) => {
+            if (args[0] === 0) {
+              return staticInfos.word_count;
+            }
+            const result = _tempInterface.getNumberAndStringFromResource(...args);
+            return result;
+          },
+          getStringFromResource: (...args) => {
+            if (args[0] === "edit_note_hint_title") {
+              return staticInfos.edit_note_hint_title;
+            }
+            if (args[0] === "image_annotation_edit_hint") {
+              return staticInfos.image_annotation_edit_hint;
+            }
+            if (args[0] === "note_mindnote_entrance_hint_newversion") {
+              return staticInfos.note_mindnote_entrance_hint_newversion;
+            }
+            if (args[0] === "note_mindnote_entrance_icon_text_newversion") {
+              return staticInfos.note_mindnote_entrance_icon_text_newversion;
+            }
+            const result = _tempInterface.getStringFromResource(...args);
+            return result;
+          },
+          isDarkMode: (...args) => {
+            return _tempInterface.isDarkMode(...args);
+          },
+          isFirstlyEnterNoteEdit: (...args) => {
+            return staticInfos.isFirstlyEnterNoteEdit;
+            const result = _tempInterface.isFirstlyEnterNoteEdit(...args);
+            return result;
+          },
+          isNoteCreated: (...args) => {
+            return staticInfos.isNoteCreated;
+            const result = _tempInterface.isNoteCreated(...args);
+            return result;
+          },
+          onChangeToMindMap: (...args) => {
+            return _tempInterface.onChangeToMindMap(...args);
+          },
+          onContentOverLength: (...args) => {
+            return _tempInterface?.onContentOverLength(...args);
+          },
+          onDisableScroll: (...args) => {
+            return _tempInterface.onDisableScroll(...args);
+          },
+          onEmbedElementClicked: (...args) => {
+            return _tempInterface.onEmbedElementClicked(...args);
+          },
+          onImageAnnotationOverLength: (...args) => {
+            return _tempInterface.onImageAnnotationOverLength(...args);
+          },
+          onPagePrepared: (...args) => {
+            return _tempInterface.onPagePrepared(...args);
+          },
+          onPopMenuHide: (...args) => {
+            return _tempInterface.onPopMenuHide(...args);
+          },
+          onRichTextPanelStateChanged: (...args) => {
+            return _tempInterface.onRichTextPanelStateChanged(...args);
+          },
+          onSaveData: (...args) => {
+            return _tempInterface.onSaveData(...args);
+          },
+          onShareImage: (...args) => {
+            return _tempInterface.onShareImage(...args);
+          },
+          onShowMindNoteGuide: (...args) => {
+            return _tempInterface.onShowMindNoteGuide(...args);
+          },
+          onStartDragElement: (...args) => {
+            return _tempInterface.onStartDragElement(...args);
+          },
+          onStateChanged: (...args) => {
+            const result = _tempInterface.onStateChanged(...args);
+            return result;
+          },
+          onTextCountChanged: (...args) => {
+            const result = _tempInterface.onTextCountChanged(...args);
+            return result;
+          },
+          onTextStyleChanged: (...args) => {
+            const result = _tempInterface.onTextStyleChanged(...args);
+            return result;
+          },
+          onTitleChanged: (...args) => {
+            return _tempInterface.onTitleChanged(...args);
+          },
+          onUndoRedoStateChanged: (...args) => {
+            return _tempInterface.onUndoRedoStateChanged(...args);
+          },
+          performHaptic: (...args) => {
+            return _tempInterface.performHaptic(...args);
+          },
+          trackEvent: (...args) => {
+            return _tempInterface.trackEvent(...args);
+          },
+        };
+      }
+    };
+    hackRich();
+  </script>
+  <noscript>You need to enable JavaScript to run this app.</noscript>
+  <script>
+    (function fakeElement() {
+      const staticInfos = window.rich_editor_interface && window.rich_editor_interface.STATIC_INFOS && window.rich_editor_interface.STATIC_INFOS;
+      if (!staticInfos || !staticInfos.isNoteCreated) return;
+      document.write(`
+      <div id="fake-root">
+      <div class="css-k7hb2f">
+        <div class="theme-container">
+          <div class="theme-container__content">
+            <div class="ProseMirrorFC">
+              <div class="origin-title" tabindex="1">
+                <div class="title-textarea" contenteditable="true" style="--title-placeholder: '${staticInfos.edit_note_hint_title}'"></div>
+              </div>
+              <div id="drag-effect" class="ProseMirror pm-container disable-pointer"
+                style="position: absolute; height: 0px;"></div>
+              <div class="info-bar">
+                <span class="time" tabindex="1">
+                  ${staticInfos.info_timeString}
+                </span><span class="text-count" tabindex="1">${staticInfos.word_count}</span>
+              </div>
+              <div class="pm-container" id="pm-container">
+                <div contenteditable="true" translate="no" class="ProseMirror theme-leaf ProseMirror-focused">
+                  <div class="pm-block drop-landing ProseMirror-widget" contenteditable="false" tabindex="1"
+                    aria-label="笔记内容分段详情"></div>
+                  <div class="placeholder ProseMirror-widget" contenteditable="false">
+                    <div class="placeholder--text">${staticInfos.note_mindnote_entrance_hint_newversion}</div>
+                    <div class="placeholder--btn"><img class="placeholder--btn--icon" src="./mind_map.svg">
+                      <div class="placeholder--btn--text">${staticInfos.note_mindnote_entrance_icon_text_newversion}</div>
+                    </div>
+                  </div>
+                  <p class=""><br class="ProseMirror-trailingBreak"></p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+      `);
+    })();
+  </script>
+  <div id="root"></div>
+</body>
+
+</html>

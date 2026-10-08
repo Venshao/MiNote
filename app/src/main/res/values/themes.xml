@@ -1,8 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
 
-    <style name="Theme.MyApplication" parent="android:Theme.DeviceDefault.NoActionBar">
+    <style name="Theme.MyApplication" parent="Theme.Material3.Light.NoActionBar">
         <item name="android:windowBackground">@color/app_background</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="colorPrimary">@color/note_action_yellow</item>
+        <!-- 避免 AppBar 折叠时落到 Material3 默认浅紫色容器色 -->
+        <item name="colorPrimaryContainer">@color/app_background</item>
+        <item name="colorSurface">@color/app_background</item>
+        <item name="colorSurfaceContainer">@color/app_background</item>
+        <item name="colorSurfaceContainerHigh">@color/app_background</item>
+        <item name="colorSurfaceContainerHighest">@color/app_background</item>
+        <item name="colorSurfaceContainerLow">@color/app_background</item>
+        <item name="colorSurfaceContainerLowest">@color/app_background</item>
     </style>
 
     <style name="Theme.MyApplication.Starting" parent="Theme.SplashScreen">

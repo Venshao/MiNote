@@ -214,18 +214,19 @@ object NoteImageCache {
                 val body = response.body ?: return NoteImageDownloadResult.Failed
                 val bytes = body.bytes()
                 if (bytes.isEmpty()) {
-                    return if (code in 300..499) NoteImageDownloadResult.AuthExpired
-                    else NoteImageDownloadResult.Failed
+                    // 空体：仅 401/403 视为登录失效，404 等单图缺失只记 Failed，避免中止整轮同步
+                    return NoteImageDownloadResult.Failed
                 }
 
                 val contentType = response.header("Content-Type").orEmpty().lowercase()
                 if (contentType.contains("json") || contentType.contains("text/html")) {
                     val text = bytes.toString(Charsets.UTF_8).lowercase()
-                    val authHint = text.contains("login") || text.contains("auth") ||
-                        text.contains("unauthorized") || text.contains("cookie") ||
+                    val authHint = text.contains("login") || text.contains("unauthorized") ||
                         text.contains("重新登录") || text.contains("\"code\":401") ||
-                        text.contains("\"code\":10001") || text.contains("\"code\":10017")
-                    return if (authHint || code in 400..499) {
+                        text.contains("\"code\":10001") || text.contains("\"code\":10017") ||
+                        (text.contains("cookie") && (text.contains("invalid") || text.contains("expire")))
+                    // 必须有明确鉴权线索，或本就是 401/403；普通 404 JSON 不得当成 Cookie 失效
+                    return if (authHint || code == 401 || code == 403) {
                         NoteImageDownloadResult.AuthExpired
                     } else {
                         NoteImageDownloadResult.Failed

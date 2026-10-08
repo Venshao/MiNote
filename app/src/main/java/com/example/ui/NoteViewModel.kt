@@ -11,6 +11,7 @@ import com.example.data.NoteImageDownloadResult
 import com.example.data.NoteRepository
 import com.example.data.XiaomiRichTextParser
 import com.example.security.NoteBackupCrypto
+import com.example.ui.list.NoteListItem
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -20,6 +21,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.atomic.AtomicBoolean
@@ -40,22 +42,40 @@ class NoteViewModel(
     private val _editingNote = MutableStateFlow<NoteEntity?>(null)
     val editingNote: StateFlow<NoteEntity?> = _editingNote.asStateFlow()
 
-    // Live search and pin-sort notes (Combining DB notes flow with search input flow)
+    // Live search and pin-sort notes（解析/过滤放 Default，避免主线程卡顿）
     val notes: StateFlow<List<NoteEntity>> = combine(repository.allNotes, _searchQuery) { allNotes, query ->
         if (query.isBlank()) {
             allNotes
         } else {
             allNotes.filter { note ->
                 val plainText = XiaomiRichTextParser.toPlainText(note.snippet)
-                plainText.contains(query, ignoreCase = true) || 
-                note.title.contains(query, ignoreCase = true)
+                plainText.contains(query, ignoreCase = true) ||
+                    note.title.contains(query, ignoreCase = true)
             }
         }
-    }.stateIn(
-        scope = viewModelScope,
-        started = SharingStarted.WhileSubscribed(5000),
-        initialValue = emptyList()
-    )
+    }
+        .flowOn(Dispatchers.Default)
+        .stateIn(
+            scope = viewModelScope,
+            // Eagerly：进编辑页时 MainActivity 停订阅，仍持续收 Room，返回才能立刻看到改动
+            started = SharingStarted.Eagerly,
+            initialValue = emptyList()
+        )
+
+    private val _imageCacheTick = MutableStateFlow(0L)
+    val imageCacheTick: StateFlow<Long> = _imageCacheTick.asStateFlow()
+
+    /** 对齐官方 NoteCache：列表 bind 前预计算标题/摘要/时间；叠加 imageCacheTick 以便下图后刷新缩略图 */
+    val listItems: StateFlow<List<NoteListItem>> = combine(notes, imageCacheTick) { list, _ ->
+        val ctx = getApplication<Application>()
+        list.map { NoteListItem.from(it, ctx) }
+    }
+        .flowOn(Dispatchers.Default)
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.Eagerly,
+            initialValue = emptyList()
+        )
 
     fun setSearchQuery(query: String) {
         _searchQuery.value = query
@@ -178,8 +198,9 @@ class NoteViewModel(
     /**
      * 备份格式 v2：便签 + 按 fileId 索引的本地图片（Base64）。
      * 兼容旧版纯 JSONArray。
+     * 重活一律 Dispatchers.IO，避免 lifecycleScope.launch 默认主线程卡 ANR。
      */
-    suspend fun getExportJsonString(): String {
+    suspend fun getExportJsonString(): String = withContext(Dispatchers.IO) {
         val list = repository.allNotes.first()
         val notesArr = JSONArray()
         val imagesObj = JSONObject()
@@ -200,18 +221,18 @@ class NoteViewModel(
             }
         }
 
-        return JSONObject()
+        JSONObject()
             .put("format", BACKUP_FORMAT_V2)
             .put("notes", notesArr)
             .put("images", imagesObj)
             .toString(4)
     }
 
-    suspend fun importNotesFromJson(jsonString: String): Result<Int> {
-        return try {
+    suspend fun importNotesFromJson(jsonString: String): Result<Int> = withContext(Dispatchers.IO) {
+        try {
             val trimmed = jsonString.trim()
             if (trimmed.isBlank()) {
-                return Result.failure(IllegalArgumentException("备份内容为空"))
+                return@withContext Result.failure(IllegalArgumentException("备份内容为空"))
             }
 
             val notesArr: JSONArray
@@ -219,7 +240,7 @@ class NoteViewModel(
             if (trimmed.startsWith("{")) {
                 val root = JSONObject(trimmed)
                 notesArr = root.optJSONArray("notes")
-                    ?: return Result.failure(IllegalArgumentException("备份缺少 notes 字段"))
+                    ?: return@withContext Result.failure(IllegalArgumentException("备份缺少 notes 字段"))
                 imagesObj = root.optJSONObject("images")
             } else {
                 notesArr = JSONArray(trimmed)
@@ -259,8 +280,8 @@ class NoteViewModel(
         }
     }
 
-    suspend fun exportEncryptedBackup(password: String): Result<ByteArray> {
-        return try {
+    suspend fun exportEncryptedBackup(password: String): Result<ByteArray> = withContext(Dispatchers.IO) {
+        try {
             val jsonBytes = getExportJsonString().toByteArray(Charsets.UTF_8)
             Result.success(NoteBackupCrypto.encrypt(jsonBytes, password))
         } catch (e: Exception) {
@@ -268,26 +289,29 @@ class NoteViewModel(
         }
     }
 
-    suspend fun importBackupFile(fileBytes: ByteArray, password: String): Result<Int> {
-        return try {
-            val jsonString = when {
-                NoteBackupCrypto.isEncrypted(fileBytes) -> {
-                    NoteBackupCrypto.decrypt(fileBytes, password).toString(Charsets.UTF_8)
-                }
-                else -> {
-                    val text = fileBytes.toString(Charsets.UTF_8).trim()
-                    if (text.startsWith("[") || text.startsWith("{")) {
-                        text
-                    } else {
-                        return Result.failure(IllegalArgumentException("无法识别备份格式，请检查文件或密码"))
+    suspend fun importBackupFile(fileBytes: ByteArray, password: String): Result<Int> =
+        withContext(Dispatchers.IO) {
+            try {
+                val jsonString = when {
+                    NoteBackupCrypto.isEncrypted(fileBytes) -> {
+                        NoteBackupCrypto.decrypt(fileBytes, password).toString(Charsets.UTF_8)
+                    }
+                    else -> {
+                        val text = fileBytes.toString(Charsets.UTF_8).trim()
+                        if (text.startsWith("[") || text.startsWith("{")) {
+                            text
+                        } else {
+                            return@withContext Result.failure(
+                                IllegalArgumentException("无法识别备份格式，请检查文件或密码")
+                            )
+                        }
                     }
                 }
+                importNotesFromJson(jsonString)
+            } catch (e: Exception) {
+                Result.failure(e)
             }
-            importNotesFromJson(jsonString)
-        } catch (e: Exception) {
-            Result.failure(e)
         }
-    }
 
     // --- Xiaomi Cloud Sync ---
     // Cookie 只在同步时用；图片永久落盘后，打开便签只读本地缓存。
@@ -318,9 +342,6 @@ class NoteViewModel(
 
     private val _syncState = MutableStateFlow<SyncState>(SyncState.Idle)
     val syncState: StateFlow<SyncState> = _syncState.asStateFlow()
-
-    private val _imageCacheTick = MutableStateFlow(0L)
-    val imageCacheTick: StateFlow<Long> = _imageCacheTick.asStateFlow()
 
     private var syncJob: kotlinx.coroutines.Job? = null
 
@@ -521,10 +542,11 @@ class NoteViewModel(
         syncJob = viewModelScope.launch(Dispatchers.IO) {
             val cleanCookie = cookie.replace("\n", "").replace("\r", "").trim()
             if (cleanCookie.isBlank()) {
-                _syncState.value = SyncState.Error("请先粘贴 Cookie（只需一次，会保存在本地）")
+                _syncState.value = SyncState.Error("请先粘贴 Cookie（仅本次同步使用，不会保存）")
                 return@launch
             }
-            syncPrefs().edit().putString(PREF_COOKIE, cleanCookie).apply()
+            // Cookie 不落盘；顺带清掉历史残留
+            syncPrefs().edit().remove(PREF_COOKIE).apply()
 
             _syncState.value = SyncState.Syncing(
                 phase = SyncPhase.FETCHING_LIST,

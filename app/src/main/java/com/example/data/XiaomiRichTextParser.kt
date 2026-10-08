@@ -35,69 +35,104 @@ object XiaomiRichTextParser {
 
     /**
      * Parse rich text content containing &lt;text&gt;, checkbox, or &lt;img fileid&gt; tags.
+     * 兼容官方 H5 `pmNode2SavedData` 输出（含 `&lt;new-format/&gt;`、`&lt;bullet/&gt;`）。
      */
     fun parse(richText: String): List<RichTextLine> {
         if (richText.isBlank()) return emptyList()
-        val lines = richText.split("\n")
-        return lines.map { line ->
-            val trimmed = line.trim()
+        val normalized = stripNewFormatPrefix(richText)
+        val lines = normalized.split("\n")
+        return lines.mapNotNull { line ->
+            var trimmed = line.trim()
+            if (trimmed.isEmpty() || trimmed == "<new-format/>") return@mapNotNull null
+            // 行首可能残留 new-format 前缀
+            if (trimmed.startsWith("<new-format/>")) {
+                trimmed = trimmed.removePrefix("<new-format/>").trim()
+                if (trimmed.isEmpty()) return@mapNotNull null
+            }
+
             val imgMatch = imgTagRegex.find(trimmed)
-            if (imgMatch != null && trimmed.startsWith("<img", ignoreCase = true)) {
-                RichTextLine(
-                    isCheckbox = false,
-                    checked = false,
-                    text = "",
-                    fileId = imgMatch.groupValues[1]
-                )
-            } else if (trimmed.startsWith("<input") && trimmed.contains("type=\"checkbox\"")) {
-                val isChecked = trimmed.contains("checked=\"true\"")
-                val closingIdx = trimmed.indexOf("/>")
-                val content = if (closingIdx != -1) {
-                    trimmed.substring(closingIdx + 2)
-                } else {
-                    trimmed
+            when {
+                imgMatch != null && trimmed.startsWith("<img", ignoreCase = true) -> {
+                    RichTextLine(
+                        isCheckbox = false,
+                        checked = false,
+                        text = "",
+                        fileId = imgMatch.groupValues[1]
+                    )
                 }
-
-                val hasRight = content.contains("<right>") && content.contains("</right>")
-                val textWithNoRight = extractRightInner(content, hasRight)
-
-                RichTextLine(
-                    isCheckbox = true,
-                    checked = isChecked,
-                    text = unescape(textWithNoRight),
-                    isRightAligned = hasRight
-                )
-            } else if (trimmed.startsWith("<text")) {
-                val startIdx = trimmed.indexOf('>')
-                val endIdx = trimmed.lastIndexOf("</text>")
-                val content = if (startIdx != -1 && endIdx > startIdx) {
-                    trimmed.substring(startIdx + 1, endIdx)
-                } else if (startIdx != -1) {
-                    trimmed.substring(startIdx + 1)
-                } else {
-                    trimmed
+                trimmed.startsWith("<input") && trimmed.contains("type=\"checkbox\"") -> {
+                    val isChecked = trimmed.contains("checked=\"true\"")
+                    val content = contentAfterSelfClosing(trimmed)
+                    val hasRight = content.contains("<right>") && content.contains("</right>")
+                    RichTextLine(
+                        isCheckbox = true,
+                        checked = isChecked,
+                        text = unescape(extractRightInner(content, hasRight)),
+                        isRightAligned = hasRight
+                    )
                 }
-
-                val hasRight = content.contains("<right>") && content.contains("</right>")
-                val textWithNoRight = extractRightInner(content, hasRight)
-
-                RichTextLine(
-                    isCheckbox = false,
-                    checked = false,
-                    text = unescape(textWithNoRight),
-                    isRightAligned = hasRight
-                )
-            } else {
-                val hasRight = line.contains("<right>") && line.contains("</right>")
-                val textWithNoRight = extractRightInner(line, hasRight)
-                RichTextLine(
-                    isCheckbox = false,
-                    checked = false,
-                    text = textWithNoRight,
-                    isRightAligned = hasRight
-                )
+                trimmed.startsWith("<bullet") -> {
+                    RichTextLine(
+                        isCheckbox = false,
+                        checked = false,
+                        text = "• ${unescape(contentAfterSelfClosing(trimmed))}"
+                    )
+                }
+                trimmed.startsWith("<order") -> {
+                    RichTextLine(
+                        isCheckbox = false,
+                        checked = false,
+                        text = unescape(contentAfterSelfClosing(trimmed))
+                    )
+                }
+                trimmed.startsWith("<text") -> {
+                    val startIdx = trimmed.indexOf('>')
+                    val endIdx = trimmed.lastIndexOf("</text>")
+                    val content = if (startIdx != -1 && endIdx > startIdx) {
+                        trimmed.substring(startIdx + 1, endIdx)
+                    } else if (startIdx != -1) {
+                        trimmed.substring(startIdx + 1)
+                    } else {
+                        trimmed
+                    }
+                    val hasRight = content.contains("<right>") && content.contains("</right>")
+                    RichTextLine(
+                        isCheckbox = false,
+                        checked = false,
+                        text = unescape(extractRightInner(content, hasRight)),
+                        isRightAligned = hasRight
+                    )
+                }
+                trimmed.startsWith("<h1") || trimmed.startsWith("<h2") || trimmed.startsWith("<h3") ||
+                    trimmed.startsWith("<hr") || trimmed.startsWith("<quote") ||
+                    trimmed.startsWith("<ul") || trimmed.startsWith("<ol") || trimmed.startsWith("<li") -> {
+                    // 结构标签：列表预览里尽量抽出纯文本
+                    val plain = trimmed.replace(Regex("<[^>]+>"), "").trim()
+                    if (plain.isEmpty()) null
+                    else RichTextLine(isCheckbox = false, checked = false, text = unescape(plain))
+                }
+                else -> {
+                    val hasRight = trimmed.contains("<right>") && trimmed.contains("</right>")
+                    RichTextLine(
+                        isCheckbox = false,
+                        checked = false,
+                        text = extractRightInner(trimmed, hasRight),
+                        isRightAligned = hasRight
+                    )
+                }
             }
         }
+    }
+
+    /** 官方新格式正文前缀；编辑器 round-trip 可保留，列表解析前剥掉 */
+    fun stripNewFormatPrefix(richText: String): String {
+        val t = richText.trimStart()
+        return if (t.startsWith("<new-format/>")) t.removePrefix("<new-format/>") else richText
+    }
+
+    private fun contentAfterSelfClosing(tagLine: String): String {
+        val closingIdx = tagLine.indexOf("/>")
+        return if (closingIdx != -1) tagLine.substring(closingIdx + 2) else tagLine
     }
 
     fun extractImageFileIds(richText: String): List<String> {
@@ -115,6 +150,7 @@ object XiaomiRichTextParser {
     fun toRichTextFromLines(lines: List<RichTextLine>): String {
         return lines.joinToString("\n") { line ->
             if (line.isImage) {
+                // 对齐官方 HtmlParser$ImageElement：fileid / imgshow / imgdes
                 """<img fileid="${line.fileId}" imgshow="0" imgdes="" />"""
             } else {
                 val escapedText = escape(line.text)
@@ -127,6 +163,12 @@ object XiaomiRichTextParser {
                 }
             }
         }
+    }
+
+    /** 在正文末尾追加官方格式图片行（Web 编辑器 insertImage 失败时的兜底） */
+    fun appendImageTag(richText: String, fileId: String, imgShow: String = "0", imgDes: String = ""): String {
+        val tag = """<img fileid="$fileId" imgshow="$imgShow" imgdes="$imgDes" />"""
+        return if (richText.isBlank()) tag else richText.trimEnd() + "\n" + tag
     }
 
     /**

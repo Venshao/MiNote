@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 文字样式：与其它底栏图标统一为深色线框 Aa -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFB005"
+        android:pathData="M5,19v-1.5h3.5V7.5H5V6h9v1.5H10.5V17.5H14V19H5z" />
+    <path
+        android:fillColor="#FFB005"
+        android:pathData="M15.2,19l2.2,-6h1.2l2.2,6h-1.35l-0.45,-1.3h-2.05L16.55,19H15.2zM17.15,16.45h1.5l-0.75,-2.15h-0.05L17.15,16.45z" />
+</vector>

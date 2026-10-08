@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 列表缩略图默认圆角；网格模式由 Adapter 按卡片圆角动态覆盖 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="#FFE8EAED" />
+    <corners android:radius="@dimen/list_item_preview_image_radius" />
+</shape>

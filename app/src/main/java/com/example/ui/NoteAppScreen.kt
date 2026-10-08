@@ -91,43 +91,11 @@ fun NoteAppScreen(viewModel: NoteViewModel) {
     val notes by viewModel.notes.collectAsStateWithLifecycle()
     val searchQuery by viewModel.searchQuery.collectAsStateWithLifecycle()
     val isGridView by viewModel.isGridView.collectAsStateWithLifecycle()
-    val editingNote by viewModel.editingNote.collectAsStateWithLifecycle()
-
-    // Local copy of notes to prevent active screen removal before exit transitions complete
-    var activeEditingNote by remember { mutableStateOf<NoteEntity?>(null) }
-
-    // 0f = 编辑页完全展示，1f = 滑出屏幕；使用 tween 避免 spring 回弹导致末尾抖动
-    val isEditorOpen = editingNote != null
-    val editorOffsetY by animateFloatAsState(
-        targetValue = if (isEditorOpen) 0f else 1f,
-        animationSpec = tween(
-            durationMillis = if (isEditorOpen) 300 else 260,
-            easing = FastOutSlowInEasing
-        ),
-        finishedListener = { value ->
-            if (value >= 1f) {
-                activeEditingNote = null
-            }
-        },
-        label = "EditorOffset"
-    )
-
-    SideEffect {
-        if (editingNote != null) {
-            activeEditingNote = editingNote
-        }
-    }
-
-    // Gracefully handle back presses by saving the active editing note instead of exiting the app
-    BackHandler(enabled = editingNote != null) {
-        viewModel.saveActiveNote()
-    }
 
     val listState = rememberLazyListState()
     val gridState = rememberLazyStaggeredGridState()
 
     val statusBarHeightDp = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
-    val navigationBarHeightDp = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
     val topPaddingDp = statusBarHeightDp + 130.dp
 
     val context = LocalContext.current
@@ -136,6 +104,13 @@ fun NoteAppScreen(viewModel: NoteViewModel) {
     var backupPassword by remember { mutableStateOf("") }
     var pendingExportPassword by remember { mutableStateOf<String?>(null) }
     var pendingImportPassword by remember { mutableStateOf<String?>(null) }
+
+    val openNoteEditor: (NoteEntity) -> Unit = remember {
+        { note -> context.startActivity(com.example.ui.official.NoteEditActivity.intent(context, note.id)) }
+    }
+    val openNewNoteEditor: () -> Unit = remember {
+        { context.startActivity(com.example.ui.official.NoteEditActivity.intentNew(context)) }
+    }
 
     // Backup & Restore Launchers (Storage Access Framework)
     val createJsonLauncher = rememberLauncherForActivityResult(
@@ -154,8 +129,11 @@ fun NoteAppScreen(viewModel: NoteViewModel) {
                         ).show()
                         return@launch
                     }
-                    context.contentResolver.openOutputStream(uri)?.use { out ->
-                        out.write(exportResult.getOrThrow())
+                    val bytes = exportResult.getOrThrow()
+                    withContext(Dispatchers.IO) {
+                        context.contentResolver.openOutputStream(uri)?.use { out ->
+                            out.write(bytes)
+                        } ?: throw IllegalStateException("无法写入文件")
                     }
                     Toast.makeText(context, "加密备份导出成功！", Toast.LENGTH_SHORT).show()
                 } catch (e: Exception) {
@@ -174,9 +152,11 @@ fun NoteAppScreen(viewModel: NoteViewModel) {
             val password = pendingImportPassword ?: backupPassword
             coroutineScope.launch {
                 try {
-                    val fileBytes = context.contentResolver.openInputStream(uri)?.use { input ->
-                        input.readBytes()
-                    } ?: throw IllegalStateException("无法读取文件")
+                    val fileBytes = withContext(Dispatchers.IO) {
+                        context.contentResolver.openInputStream(uri)?.use { input ->
+                            input.readBytes()
+                        } ?: throw IllegalStateException("无法读取文件")
+                    }
                     val result = viewModel.importBackupFile(fileBytes, password)
                     if (result.isSuccess) {
                         Toast.makeText(
@@ -214,6 +194,7 @@ fun NoteAppScreen(viewModel: NoteViewModel) {
             viewModel = viewModel,
             listState = listState,
             gridState = gridState,
+            onOpenNote = openNoteEditor,
             modifier = Modifier.fillMaxSize()
         )
 
@@ -236,7 +217,7 @@ fun NoteAppScreen(viewModel: NoteViewModel) {
                 .navigationBarsPadding()
         ) {
             FloatingActionButton(
-                onClick = { viewModel.startNewNote() },
+                onClick = openNewNoteEditor,
                 containerColor = MiNoteColors.ActionYellow,
                 contentColor = Color.White,
                 shape = CircleShape, // Perfectly round
@@ -249,32 +230,6 @@ fun NoteAppScreen(viewModel: NoteViewModel) {
                     imageVector = Icons.Default.Add,
                     contentDescription = "新增便签",
                     modifier = Modifier.size(28.dp)
-                )
-            }
-        }
-
-        // Slide-in Custom Editor Pane (using translationY to make transition incredibly smooth with zero content shifting)
-        val activeNoteCopy = activeEditingNote
-        if (activeNoteCopy != null) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .graphicsLayer {
-                        translationY = size.height * editorOffsetY.coerceIn(0f, 1f)
-                        clip = true
-                    }
-            ) {
-                NoteEditorScreen(
-                    note = activeNoteCopy,
-                    viewModel = viewModel,
-                    onSave = { viewModel.saveActiveNote() },
-                    onDismiss = { viewModel.discardOrCancelActiveNote() },
-                    onDelete = { viewModel.deleteActiveNote() },
-                    onUpdateSnippetAndTitle = { s, t -> viewModel.updateActiveNoteSnippetAndTitle(s, t) },
-                    onUpdateColor = { c -> viewModel.updateActiveNoteColor(c) },
-                    onToggleSticky = { viewModel.toggleActiveNoteSticky() },
-                    statusBarHeight = statusBarHeightDp,
-                    navigationBarHeight = navigationBarHeightDp
                 )
             }
         }
@@ -322,6 +277,7 @@ private fun NotesScrollContent(
     viewModel: NoteViewModel,
     listState: LazyListState,
     gridState: LazyStaggeredGridState,
+    onOpenNote: (NoteEntity) -> Unit,
     modifier: Modifier = Modifier
 ) {
     if (notes.isEmpty()) {
@@ -411,7 +367,7 @@ private fun NotesScrollContent(
                 key = { it.id },
                 contentType = { "note_card" }
             ) { note ->
-                val openEditor = remember(note.id, note.modifyDate) { { viewModel.startEditing(note) } }
+                val openEditor = remember(note.id, onOpenNote) { { onOpenNote(note) } }
                 val deleteNote = remember(note.id) { { viewModel.deleteNoteDirectly(note.id) } }
                 val toggleSticky = remember(note.id, note.stickyTime) { { viewModel.toggleStickyDirectly(note) } }
                 NoteCard(
@@ -434,7 +390,7 @@ private fun NotesScrollContent(
                 key = { it.id },
                 contentType = { "note_card" }
             ) { note ->
-                val openEditor = remember(note.id, note.modifyDate) { { viewModel.startEditing(note) } }
+                val openEditor = remember(note.id, onOpenNote) { { onOpenNote(note) } }
                 val deleteNote = remember(note.id) { { viewModel.deleteNoteDirectly(note.id) } }
                 val toggleSticky = remember(note.id, note.stickyTime) { { viewModel.toggleStickyDirectly(note) } }
                 NoteCard(
@@ -1571,7 +1527,6 @@ fun CloudSyncDialog(
     onSelectFileImport: () -> Unit
 ) {
     var dialogTabId by remember { mutableStateOf(0) } // 0 = Cloud Sync, 1 = Backup
-    val context = LocalContext.current
 
     Dialog(onDismissRequest = onDismiss) {
         Surface(
@@ -1693,12 +1648,12 @@ fun CloudSyncDialog(
                         Text("关闭")
                     }
                 } else {
-                    val prefs = remember(context) { context.getSharedPreferences("mi_sync_prefs", android.content.Context.MODE_PRIVATE) }
-                    var cookieText by remember { mutableStateOf(prefs.getString("pasted_cookie", "") ?: "") }
+                    // Cookie 仅内存中使用，不同步写入 SharedPreferences
+                    var cookieText by remember { mutableStateOf("") }
                     val syncState by viewModel.syncState.collectAsStateWithLifecycle()
 
                     Text(
-                        text = "粘贴一次 Cookie 即可：先同步列表，再拉详情；遇到图片会并发下载到本地。之后打开便签按图片 ID 读本地缓存，不依赖 Cookie。",
+                        text = "粘贴 Cookie 后开始同步：先拉列表再拉详情，图片会下载到本地。Cookie 仅本次使用、不会保存；之后打开便签按图片 ID 读本地缓存。",
                         fontSize = 13.sp,
                         color = Color(0xFF44474E),
                         lineHeight = 18.sp
@@ -1717,10 +1672,7 @@ fun CloudSyncDialog(
 
                     OutlinedTextField(
                         value = cookieText,
-                        onValueChange = { newValue ->
-                            cookieText = newValue
-                            prefs.edit().putString("pasted_cookie", newValue).apply()
-                        },
+                        onValueChange = { cookieText = it },
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(80.dp),

@@ -1,0 +1,322 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 对齐官方 Hybrid 编辑页结构：顶栏 + WebView 正文 + 底部原生工具栏 -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/note_edit_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#FFFFFF"
+    android:orientation="vertical">
+
+    <LinearLayout
+        android:id="@+id/note_edit_top_bar"
+        android:layout_width="match_parent"
+        android:layout_height="56dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="4dp"
+        android:paddingEnd="8dp">
+
+        <ImageButton
+            android:id="@+id/btn_back"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:background="?android:attr/selectableItemBackgroundBorderless"
+            android:contentDescription="返回"
+            android:padding="12dp"
+            android:src="@drawable/ic_note_back" />
+
+        <TextView
+            android:id="@+id/tv_top_title"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:ellipsize="end"
+            android:gravity="center"
+            android:maxLines="1"
+            android:text="编辑便签"
+            android:textColor="#1C1B1F"
+            android:textSize="16sp"
+            android:textStyle="bold" />
+
+        <ImageButton
+            android:id="@+id/btn_done"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:background="?android:attr/selectableItemBackgroundBorderless"
+            android:contentDescription="完成"
+            android:padding="12dp"
+            android:src="@drawable/ic_note_done" />
+    </LinearLayout>
+
+    <FrameLayout
+        android:id="@+id/editor_container"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1">
+
+        <android.webkit.WebView
+            android:id="@+id/note_editor_webview"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+
+        <ProgressBar
+            android:id="@+id/editor_loading"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:layout_gravity="center"
+            android:indeterminateTint="#FFBB00" />
+    </FrameLayout>
+
+    <!-- 官方风格底栏：图 / 待办 / 项目符号 / 加粗 / 标题 / 样式面板 -->
+    <LinearLayout
+        android:id="@+id/note_edit_toolbar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="#F7F7F7"
+        android:elevation="8dp"
+        android:orientation="vertical">
+
+        <HorizontalScrollView
+            android:id="@+id/style_panel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:fillViewport="true"
+            android:visibility="gone">
+
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="48dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingStart="12dp"
+                android:paddingEnd="12dp">
+
+                <TextView
+                    android:id="@+id/btn_h1"
+                    android:layout_width="wrap_content"
+                    android:layout_height="36dp"
+                    android:background="?android:attr/selectableItemBackgroundBorderless"
+                    android:gravity="center"
+                    android:paddingStart="12dp"
+                    android:paddingEnd="12dp"
+                    android:text="H1"
+                    android:textColor="#1C1B1F"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/btn_h2"
+                    android:layout_width="wrap_content"
+                    android:layout_height="36dp"
+                    android:background="?android:attr/selectableItemBackgroundBorderless"
+                    android:gravity="center"
+                    android:paddingStart="12dp"
+                    android:paddingEnd="12dp"
+                    android:text="H2"
+                    android:textColor="#1C1B1F"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/btn_bold"
+                    android:layout_width="wrap_content"
+                    android:layout_height="36dp"
+                    android:background="?android:attr/selectableItemBackgroundBorderless"
+                    android:gravity="center"
+                    android:paddingStart="12dp"
+                    android:paddingEnd="12dp"
+                    android:text="B"
+                    android:textColor="#1C1B1F"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/btn_italic"
+                    android:layout_width="wrap_content"
+                    android:layout_height="36dp"
+                    android:background="?android:attr/selectableItemBackgroundBorderless"
+                    android:gravity="center"
+                    android:paddingStart="12dp"
+                    android:paddingEnd="12dp"
+                    android:text="I"
+                    android:textColor="#1C1B1F"
+                    android:textStyle="italic" />
+
+                <TextView
+                    android:id="@+id/btn_underline"
+                    android:layout_width="wrap_content"
+                    android:layout_height="36dp"
+                    android:background="?android:attr/selectableItemBackgroundBorderless"
+                    android:gravity="center"
+                    android:paddingStart="12dp"
+                    android:paddingEnd="12dp"
+                    android:text="U"
+                    android:textColor="#1C1B1F" />
+
+                <TextView
+                    android:id="@+id/btn_align_left"
+                    android:layout_width="wrap_content"
+                    android:layout_height="36dp"
+                    android:background="?android:attr/selectableItemBackgroundBorderless"
+                    android:gravity="center"
+                    android:paddingStart="12dp"
+                    android:paddingEnd="12dp"
+                    android:text="左"
+                    android:textColor="#1C1B1F" />
+
+                <TextView
+                    android:id="@+id/btn_align_center"
+                    android:layout_width="wrap_content"
+                    android:layout_height="36dp"
+                    android:background="?android:attr/selectableItemBackgroundBorderless"
+                    android:gravity="center"
+                    android:paddingStart="12dp"
+                    android:paddingEnd="12dp"
+                    android:text="中"
+                    android:textColor="#1C1B1F" />
+
+                <TextView
+                    android:id="@+id/btn_align_right"
+                    android:layout_width="wrap_content"
+                    android:layout_height="36dp"
+                    android:background="?android:attr/selectableItemBackgroundBorderless"
+                    android:gravity="center"
+                    android:paddingStart="12dp"
+                    android:paddingEnd="12dp"
+                    android:text="右"
+                    android:textColor="#1C1B1F" />
+            </LinearLayout>
+        </HorizontalScrollView>
+
+        <LinearLayout
+            android:id="@+id/color_panel"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingStart="16dp"
+            android:paddingEnd="16dp"
+            android:visibility="gone">
+
+            <View
+                android:id="@+id/color_dot_0"
+                android:layout_width="28dp"
+                android:layout_height="28dp"
+                android:layout_marginEnd="16dp"
+                android:background="#FFFFFF"
+                android:elevation="2dp" />
+
+            <View
+                android:id="@+id/color_dot_1"
+                android:layout_width="28dp"
+                android:layout_height="28dp"
+                android:layout_marginEnd="16dp"
+                android:background="#FFF4E5"
+                android:elevation="2dp" />
+
+            <View
+                android:id="@+id/color_dot_2"
+                android:layout_width="28dp"
+                android:layout_height="28dp"
+                android:layout_marginEnd="16dp"
+                android:background="#E3F2FD"
+                android:elevation="2dp" />
+
+            <View
+                android:id="@+id/color_dot_3"
+                android:layout_width="28dp"
+                android:layout_height="28dp"
+                android:layout_marginEnd="16dp"
+                android:background="#E8F5E9"
+                android:elevation="2dp" />
+
+            <View
+                android:id="@+id/color_dot_4"
+                android:layout_width="28dp"
+                android:layout_height="28dp"
+                android:background="#FCE4EC"
+                android:elevation="2dp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="52dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingStart="8dp"
+            android:paddingEnd="8dp">
+
+            <ImageButton
+                android:id="@+id/btn_gallery"
+                android:layout_width="44dp"
+                android:layout_height="44dp"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:contentDescription="插入图片"
+                android:padding="10dp"
+                android:src="@drawable/ic_note_gallery"
+                android:tint="@color/note_toolbar_icon" />
+
+            <ImageButton
+                android:id="@+id/btn_checkbox"
+                android:layout_width="44dp"
+                android:layout_height="44dp"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:contentDescription="待办"
+                android:padding="10dp"
+                android:src="@drawable/ic_note_checkbox"
+                android:tint="@color/note_toolbar_icon" />
+
+            <ImageButton
+                android:id="@+id/btn_bullet"
+                android:layout_width="44dp"
+                android:layout_height="44dp"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:contentDescription="项目符号"
+                android:padding="10dp"
+                android:src="@drawable/ic_note_bullet"
+                android:tint="@color/note_toolbar_icon" />
+
+            <ImageButton
+                android:id="@+id/btn_style_toggle"
+                android:layout_width="44dp"
+                android:layout_height="44dp"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:contentDescription="文字样式"
+                android:padding="10dp"
+                android:src="@drawable/ic_note_style"
+                android:tint="@color/note_toolbar_icon" />
+
+            <ImageButton
+                android:id="@+id/btn_color_toggle"
+                android:layout_width="44dp"
+                android:layout_height="44dp"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:contentDescription="便签颜色"
+                android:padding="10dp"
+                android:src="@drawable/ic_note_palette"
+                android:tint="@color/note_toolbar_icon" />
+
+            <View
+                android:layout_width="0dp"
+                android:layout_height="1dp"
+                android:layout_weight="1" />
+
+            <ImageButton
+                android:id="@+id/btn_undo"
+                android:layout_width="44dp"
+                android:layout_height="44dp"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:contentDescription="撤销"
+                android:padding="10dp"
+                android:src="@drawable/ic_note_undo"
+                android:tint="@color/note_toolbar_icon" />
+
+            <ImageButton
+                android:id="@+id/btn_redo"
+                android:layout_width="44dp"
+                android:layout_height="44dp"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:contentDescription="重做"
+                android:padding="10dp"
+                android:src="@drawable/ic_note_redo"
+                android:tint="@color/note_toolbar_icon" />
+        </LinearLayout>
+    </LinearLayout>
+</LinearLayout>

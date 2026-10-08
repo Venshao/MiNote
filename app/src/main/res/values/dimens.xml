@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 对齐官方 resources.arsc dimen（ufox MCP 解出） -->
+<resources>
+    <dimen name="common_note_list_item_bg_radius">16dp</dimen>
+    <dimen name="list_item_preview_image_radius">8dp</dimen>
+    <dimen name="list_item_primary_text_size">16sp</dimen>
+    <dimen name="list_item_secondary_text_size">14sp</dimen>
+    <dimen name="list_item_tertiary_text_size">12sp</dimen>
+    <dimen name="list_item_content_margin_start">20dp</dimen>
+    <dimen name="list_item_content_margin_top">16dp</dimen>
+    <dimen name="list_item_content_margin_bottom">16dp</dimen>
+    <dimen name="list_item_image_size">64dp</dimen>
+    <dimen name="list_item_image_margin_end">20dp</dimen>
+    <!-- 官方 list_item_margin_bottom 默认 12dp -->
+    <dimen name="list_item_margin_bottom">12dp</dimen>
+    <!-- 官方 list_item_margin_start → search_bar_margin = 13dp -->
+    <dimen name="list_item_margin_start">13dp</dimen>
+    <!-- 官方双列卡间距 10dp；ItemDecoration 四边各加一半，避免双边叠加偏疏 -->
+    <dimen name="common_grid_item_two_column_space">10dp</dimen>
+    <dimen name="common_two_column_recycler_horizontal_padding">13dp</dimen>
+    <dimen name="common_single_column_recycler_horizontal_padding">18dp</dimen>
+    <dimen name="notes_header_expanded_height">148dp</dimen>
+    <dimen name="notes_header_collapsed_height">56dp</dimen>
+</resources>

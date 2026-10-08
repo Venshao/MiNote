@@ -9,4 +9,18 @@
     <color name="white">#FFFFFFFF</color>
     <!-- 与 NoteAppScreen 主背景一致，避免启动时白屏闪烁 -->
     <color name="app_background">#FFF8F9FA</color>
+    <color name="note_list_title">#FF1C1B1F</color>
+    <color name="note_list_body">#FF44474E</color>
+    <color name="note_list_meta">#FF74777F</color>
+    <color name="note_list_empty">#FF8C8476</color>
+    <!-- 勾选/FAB 等点缀色（官方 H5/高亮仍见 #FFBB00） -->
+    <color name="note_action_yellow">#FFFFBB00</color>
+    <!-- 官方 APK 独立主题黄字符串 #FFB005；底栏图标用此色（比 FFBB00 更沉） -->
+    <color name="note_toolbar_icon">#FFFFB005</color>
+    <color name="note_accent_orange">#FFFF6700</color>
+    <color name="note_card_white">#FFFFFFFF</color>
+    <color name="note_card_yellow">#FFFFF4E5</color>
+    <color name="note_card_blue">#FFE3F2FD</color>
+    <color name="note_card_green">#FFE8F5E9</color>
+    <color name="note_card_pink">#FFFCE4EC</color>
 </resources>

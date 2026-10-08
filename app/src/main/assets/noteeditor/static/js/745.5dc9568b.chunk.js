@@ -1,0 +1,1 @@
+"use strict";(self.webpackChunkmi_note=self.webpackChunkmi_note||[]).push([[745],{9745:(e,n,l)=>{l.r(n),l.d(n,{fol_swiper_slide:()=>t});var s=l(9427),t=function(){function e(e){(0,s.r)(this,e)}return e.prototype.render=function(){return(0,s.h)(s.H,null,(0,s.h)("slot",null))},e}();t.style=".sc-fol-swiper-slide-h{display:block}"}}]);

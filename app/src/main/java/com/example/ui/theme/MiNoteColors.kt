@@ -3,8 +3,8 @@ package com.example.ui.theme
 import androidx.compose.ui.graphics.Color
 
 object MiNoteColors {
-    /** 与右下角创建按钮一致的主题色 */
-    val ActionYellow = Color(0xFFFFBC13)
+    /** 对齐官方 noteeditor 主色 #FFBB00 / #fb0 */
+    val ActionYellow = Color(0xFFFFBB00)
 
     data class ColorPack(
         val bg: Color,

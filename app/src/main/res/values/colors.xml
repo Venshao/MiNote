@@ -7,7 +7,7 @@
     <color name="teal_700">#FF018786</color>
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
-    <!-- 与 NoteAppScreen 主背景一致，避免启动时白屏闪烁 -->
+    <!-- 与列表页主背景一致，避免启动时白屏闪烁 -->
     <color name="app_background">#FFF8F9FA</color>
     <color name="note_list_title">#FF1C1B1F</color>
     <color name="note_list_body">#FF44474E</color>

@@ -41,10 +41,6 @@ class NoteViewModel(
     private val _isGridView = MutableStateFlow(uiPrefs().getBoolean(PREF_IS_GRID_VIEW, true))
     val isGridView: StateFlow<Boolean> = _isGridView.asStateFlow()
 
-    // Screen state: null = List View, non-null = Note detail editor
-    private val _editingNote = MutableStateFlow<NoteEntity?>(null)
-    val editingNote: StateFlow<NoteEntity?> = _editingNote.asStateFlow()
-
     // Live search and pin-sort notes（解析/过滤放 Default，避免主线程卡顿）
     val notes: StateFlow<List<NoteEntity>> = combine(repository.allNotes, _searchQuery) { allNotes, query ->
         if (query.isBlank()) {
@@ -60,7 +56,7 @@ class NoteViewModel(
         .flowOn(Dispatchers.Default)
         .stateIn(
             scope = viewModelScope,
-            // Eagerly：进编辑页时 MainActivity 停订阅，仍持续收 Room，返回才能立刻看到改动
+            // Eagerly：进编辑页时列表停订阅，仍持续收 Room，返回才能立刻看到改动
             started = SharingStarted.Eagerly,
             initialValue = emptyList()
         )
@@ -88,103 +84,6 @@ class NoteViewModel(
         val next = !_isGridView.value
         _isGridView.value = next
         uiPrefs().edit().putBoolean(PREF_IS_GRID_VIEW, next).apply()
-    }
-
-    fun startEditing(note: NoteEntity) {
-        _editingNote.value = note
-    }
-
-    fun startNewNote() {
-        val currentTime = System.currentTimeMillis()
-        // Generate a 17-digit randomized number string to match Xiaomi note ID format
-        val randomSuffix = (1000..9999).random().toString()
-        val randomId = "$currentTime$randomSuffix"
-        val blankNote = NoteEntity(
-            id = randomId,
-            snippet = "",
-            modifyDate = currentTime,
-            createDate = currentTime,
-            colorId = 0,
-            status = "normal",
-            extraInfo = "{\"title\":\"\"}"
-        )
-        _editingNote.value = blankNote
-    }
-
-    fun updateActiveNoteSnippetAndTitle(newSnippet: String, newTitle: String) {
-        val current = _editingNote.value ?: return
-        
-        val extraJson = try {
-            val json = if (current.extraInfo.isNotBlank()) JSONObject(current.extraInfo) else JSONObject()
-            json.put("title", newTitle)
-            json.toString()
-        } catch (e: Exception) {
-            "{\"title\":\"${newTitle.replace("\"", "\\\"")}\"}"
-        }
-
-        _editingNote.value = current.copy(
-            snippet = newSnippet,
-            extraInfo = extraJson,
-            modifyDate = System.currentTimeMillis()
-        )
-    }
-
-    fun updateActiveNoteColor(colorId: Int) {
-        val current = _editingNote.value ?: return
-        _editingNote.value = current.copy(
-            colorId = colorId,
-            modifyDate = System.currentTimeMillis()
-        )
-    }
-
-    fun toggleCheckbox(note: NoteEntity, index: Int, checked: Boolean) {
-        val parsedLines = XiaomiRichTextParser.parse(note.snippet).toMutableList()
-        if (index >= 0 && index < parsedLines.size) {
-            val currentLine = parsedLines[index]
-            if (currentLine.isCheckbox) {
-                parsedLines[index] = currentLine.copy(checked = checked)
-                val newSnippet = XiaomiRichTextParser.toRichTextFromLines(parsedLines)
-                viewModelScope.launch {
-                    val updatedNote = note.copy(
-                        snippet = newSnippet,
-                        modifyDate = System.currentTimeMillis()
-                    )
-                    repository.insert(updatedNote)
-                }
-            }
-        }
-    }
-
-    fun toggleActiveNoteSticky() {
-        val current = _editingNote.value ?: return
-        val newStickyTime = if (current.stickyTime > 0) 0L else System.currentTimeMillis()
-        _editingNote.value = current.copy(
-            stickyTime = newStickyTime,
-            modifyDate = System.currentTimeMillis()
-        )
-    }
-
-    fun saveActiveNote() {
-        val current = _editingNote.value ?: return
-        // Only save if there's actually some content to store
-        if (current.snippet.isNotBlank() || current.title.isNotBlank()) {
-            viewModelScope.launch {
-                repository.insert(current)
-            }
-        }
-        _editingNote.value = null
-    }
-
-    fun discardOrCancelActiveNote() {
-        _editingNote.value = null
-    }
-
-    fun deleteActiveNote() {
-        val current = _editingNote.value ?: return
-        viewModelScope.launch {
-            repository.deleteById(current.id)
-        }
-        _editingNote.value = null
     }
 
     fun deleteNoteDirectly(id: String) {
@@ -683,9 +582,6 @@ class NoteViewModel(
                                 )
                                 repository.insert(working)
                                 markHydrated(working.id)
-                                if (_editingNote.value?.id == working.id) {
-                                    _editingNote.value = working
-                                }
                             } catch (e: Exception) {
                                 if (isAuthErrorMessage(e.message.orEmpty())) {
                                     cookieExpired = true
@@ -751,11 +647,6 @@ class NoteViewModel(
 
     fun resetSyncState() {
         _syncState.value = SyncState.Idle
-    }
-
-    /** 本地插入/删除图片后刷新编辑页图片展示 */
-    fun notifyImageCacheChanged() {
-        _imageCacheTick.value = _imageCacheTick.value + 1
     }
 
     companion object {

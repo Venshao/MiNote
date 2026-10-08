@@ -35,7 +35,10 @@ class NoteViewModel(
     private val _searchQuery = MutableStateFlow("")
     val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
 
-    private val _isGridView = MutableStateFlow(true)
+    private fun uiPrefs() =
+        getApplication<Application>().getSharedPreferences("mi_ui_prefs", android.content.Context.MODE_PRIVATE)
+
+    private val _isGridView = MutableStateFlow(uiPrefs().getBoolean(PREF_IS_GRID_VIEW, true))
     val isGridView: StateFlow<Boolean> = _isGridView.asStateFlow()
 
     // Screen state: null = List View, non-null = Note detail editor
@@ -82,7 +85,9 @@ class NoteViewModel(
     }
 
     fun toggleLayout() {
-        _isGridView.value = !_isGridView.value
+        val next = !_isGridView.value
+        _isGridView.value = next
+        uiPrefs().edit().putBoolean(PREF_IS_GRID_VIEW, next).apply()
     }
 
     fun startEditing(note: NoteEntity) {
@@ -185,6 +190,17 @@ class NoteViewModel(
     fun deleteNoteDirectly(id: String) {
         viewModelScope.launch {
             repository.deleteById(id)
+            clearHydrated(id)
+        }
+    }
+
+    fun deleteNotesDirectly(ids: Collection<String>) {
+        if (ids.isEmpty()) return
+        viewModelScope.launch {
+            ids.forEach { id ->
+                repository.deleteById(id)
+                clearHydrated(id)
+            }
         }
     }
 
@@ -412,7 +428,7 @@ class NoteViewModel(
         val code = json.optInt("code", -1)
         val resultStatus = json.optString("result", "")
         if (code != 0 || resultStatus != "ok") {
-            val desc = json.optString("description", "请求失败，请检查 Cookie 是否有效")
+            val desc = json.optString("description", "请求失败，请重新登录后再试")
             throw IllegalStateException(desc)
         }
         return json
@@ -436,7 +452,7 @@ class NoteViewModel(
             val request = buildMiCloudRequest(url, cleanCookie)
             client.newCall(request).execute().use { response ->
                 if (response.code == 401 || response.code == 403) {
-                    throw IllegalStateException("Cookie 已失效，请重新从浏览器复制")
+                    throw IllegalStateException("登录已过期，请重新登录后再同步")
                 }
                 if (!response.isSuccessful) {
                     throw IllegalStateException("获取便签列表失败 (HTTP ${response.code})")
@@ -542,7 +558,7 @@ class NoteViewModel(
         syncJob = viewModelScope.launch(Dispatchers.IO) {
             val cleanCookie = cookie.replace("\n", "").replace("\r", "").trim()
             if (cleanCookie.isBlank()) {
-                _syncState.value = SyncState.Error("请先粘贴 Cookie（仅本次同步使用，不会保存）")
+                _syncState.value = SyncState.Error("请先登录小米账号")
                 return@launch
             }
             // Cookie 不落盘；顺带清掉历史残留
@@ -573,7 +589,7 @@ class NoteViewModel(
 
             if (!isActive) return@launch
             if (allNotes.isEmpty()) {
-                _syncState.value = SyncState.Error("云端没有便签，或 Cookie 无权访问便签数据")
+                _syncState.value = SyncState.Error("云端没有便签，或当前账号无法访问便签数据")
                 return@launch
             }
 
@@ -602,6 +618,8 @@ class NoteViewModel(
             var failure = 0
             var imagesCached = 0
             var cookieExpired = false
+            // 进度分母用云端总数；已同步过的也算在分子里，避免只显示「待处理」条数造成误解
+            val alreadySynced = (allNotes.size - pending.size).coerceAtLeast(0)
 
             for ((index, note) in pending.withIndex()) {
                 if (!isActive || cookieExpired) break
@@ -609,8 +627,8 @@ class NoteViewModel(
                 val displayTitle = if (note.title.isNotBlank()) note.title else "未命名便签"
                 _syncState.value = SyncState.Syncing(
                     phase = SyncPhase.FETCHING_DETAILS,
-                    totalCount = pending.size,
-                    currentProgress = index,
+                    totalCount = allNotes.size,
+                    currentProgress = alreadySynced + index + 1,
                     successCount = success,
                     failureCount = failure,
                     currentNoteTitle = displayTitle,
@@ -743,6 +761,7 @@ class NoteViewModel(
     companion object {
         private const val PREF_COOKIE = "pasted_cookie"
         private const val PREF_HYDRATED_IDS = "hydrated_note_ids"
+        private const val PREF_IS_GRID_VIEW = "is_grid_view"
         private const val BACKUP_FORMAT_V2 = "minote-backup-v2"
         private const val IMAGE_DOWNLOAD_CONCURRENCY = 4
     }

@@ -1486,7 +1486,7 @@ private fun NoteImageLine(
                 )
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = "图片未缓存\n请在「同步」中用 Cookie 拉取后即可离线查看",
+                    text = "图片未缓存\n请先完成同步后再查看",
                     fontSize = 12.sp,
                     color = textColor.copy(alpha = 0.45f),
                     lineHeight = 18.sp
@@ -1648,44 +1648,33 @@ fun CloudSyncDialog(
                         Text("关闭")
                     }
                 } else {
-                    // Cookie 仅内存中使用，不同步写入 SharedPreferences
+                    // 主路径：WebView 登录小米云自动取 Cookie；粘贴仍保留为备用
                     var cookieText by remember { mutableStateOf("") }
+                    var showPasteCookie by remember { mutableStateOf(false) }
                     val syncState by viewModel.syncState.collectAsStateWithLifecycle()
+                    val context = LocalContext.current
+
+                    val loginLauncher = rememberLauncherForActivityResult(
+                        ActivityResultContracts.StartActivityForResult()
+                    ) { result ->
+                        if (result.resultCode != android.app.Activity.RESULT_OK) return@rememberLauncherForActivityResult
+                        val cookie = result.data
+                            ?.getStringExtra(MiCloudLoginActivity.EXTRA_COOKIE)
+                            ?.trim()
+                            .orEmpty()
+                        if (cookie.isBlank()) {
+                            Toast.makeText(context, "未获取到 Cookie", Toast.LENGTH_SHORT).show()
+                            return@rememberLauncherForActivityResult
+                        }
+                        cookieText = cookie
+                        viewModel.startCloudSync(cookie)
+                    }
 
                     Text(
-                        text = "粘贴 Cookie 后开始同步：先拉列表再拉详情，图片会下载到本地。Cookie 仅本次使用、不会保存；之后打开便签按图片 ID 读本地缓存。",
+                        text = "登录小米账号后即可同步云端便签到本地。",
                         fontSize = 13.sp,
                         color = Color(0xFF44474E),
                         lineHeight = 18.sp
-                    )
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    Text(
-                        text = "💡 获取方式：登录 i.mi.com 并进入便签，按 F12 打开开发者工具，在 Network 中找到 note/ 开头的请求，复制 Request Headers 中的完整 Cookie。",
-                        fontSize = 11.sp,
-                        color = Color(0xFF74777F),
-                        lineHeight = 16.sp
-                    )
-
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    OutlinedTextField(
-                        value = cookieText,
-                        onValueChange = { cookieText = it },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(80.dp),
-                        placeholder = { Text("在此粘贴登录后的 Cookie 并开始同步...", fontSize = 12.sp) },
-                        textStyle = TextStyle(fontSize = 11.sp, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = Color(0xFFFF6700),
-                            unfocusedBorderColor = Color(0xFFE1E3E8),
-                            focusedContainerColor = Color(0xFFF8F9FA),
-                            unfocusedContainerColor = Color(0xFFF8F9FA)
-                        ),
-                        shape = RoundedCornerShape(16.dp),
-                        enabled = syncState is NoteViewModel.SyncState.Idle
                     )
 
                     Spacer(modifier = Modifier.height(14.dp))
@@ -1693,15 +1682,69 @@ fun CloudSyncDialog(
                     when (val state = syncState) {
                         is NoteViewModel.SyncState.Idle -> {
                             Button(
-                                onClick = { viewModel.startCloudSync(cookieText) },
-                                enabled = cookieText.isNotBlank(),
+                                onClick = {
+                                    loginLauncher.launch(MiCloudLoginActivity.createIntent(context))
+                                },
                                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF6700), contentColor = Color.White),
                                 modifier = Modifier.fillMaxWidth(),
                                 shape = RoundedCornerShape(16.dp)
                             ) {
-                                Icon(Icons.Default.CloudDownload, contentDescription = "开始同步", modifier = Modifier.size(18.dp))
+                                Icon(Icons.Default.CloudDownload, contentDescription = "登录并同步", modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Text("开始同步全部便签", fontWeight = FontWeight.Bold)
+                                Text("登录小米账号并同步", fontWeight = FontWeight.Bold)
+                            }
+
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            TextButton(
+                                onClick = { showPasteCookie = !showPasteCookie },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(
+                                    text = if (showPasteCookie) "收起手动粘贴 Cookie" else "备用：手动粘贴 Cookie",
+                                    fontSize = 12.sp,
+                                    color = Color(0xFF74777F)
+                                )
+                            }
+
+                            if (showPasteCookie) {
+                                Text(
+                                    text = "登录 i.mi.com，F12 → Network → 任意请求 → Request Headers 里复制 Cookie。",
+                                    fontSize = 11.sp,
+                                    color = Color(0xFF74777F),
+                                    lineHeight = 16.sp
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                OutlinedTextField(
+                                    value = cookieText,
+                                    onValueChange = { cookieText = it },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(80.dp),
+                                    placeholder = { Text("粘贴 Cookie…", fontSize = 12.sp) },
+                                    textStyle = TextStyle(
+                                        fontSize = 11.sp,
+                                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                                    ),
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedBorderColor = Color(0xFFFF6700),
+                                        unfocusedBorderColor = Color(0xFFE1E3E8),
+                                        focusedContainerColor = Color(0xFFF8F9FA),
+                                        unfocusedContainerColor = Color(0xFFF8F9FA)
+                                    ),
+                                    shape = RoundedCornerShape(16.dp)
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                OutlinedButton(
+                                    onClick = { viewModel.startCloudSync(cookieText) },
+                                    enabled = cookieText.isNotBlank(),
+                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFFF6700)),
+                                    border = BorderStroke(1.dp, Color(0xFFFF6700)),
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(16.dp)
+                                ) {
+                                    Text("用粘贴的 Cookie 同步", fontWeight = FontWeight.Bold)
+                                }
                             }
 
                             Spacer(modifier = Modifier.height(8.dp))
@@ -1730,9 +1773,9 @@ fun CloudSyncDialog(
                                 ) {
                                     Text(
                                         text = if (isFetchingList) {
-                                            "正在获取云端便签列表..."
+                                            "正在同步便签…"
                                         } else {
-                                            "正在拉取详情并并发缓存图片..."
+                                            "正在下载便签内容…"
                                         },
                                         fontSize = 13.sp,
                                         fontWeight = FontWeight.Bold,
@@ -1764,23 +1807,16 @@ fun CloudSyncDialog(
                                         )
                                         Spacer(modifier = Modifier.height(8.dp))
                                         Text(
-                                            text = "列表 ${state.listFetchedCount} 条 · 进度 ${state.currentProgress} / ${state.totalCount}",
+                                            text = "已完成 ${state.currentProgress} / ${state.totalCount}",
                                             fontSize = 12.sp,
                                             color = Color(0xFF1C1B1F)
                                         )
                                         Text(
-                                            text = "正在处理: ${state.currentNoteTitle}",
+                                            text = state.currentNoteTitle,
                                             fontSize = 11.sp,
                                             color = Color(0xFF74777F),
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis
-                                        )
-                                        Spacer(modifier = Modifier.height(4.dp))
-                                        Text(
-                                            text = "成功 ${state.successCount} · 失败 ${state.failureCount} · 新缓存图片 ${state.imagesCachedCount}",
-                                            fontSize = 12.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = Color(0xFF44474E)
                                         )
                                     }
                                 }
@@ -1794,7 +1830,7 @@ fun CloudSyncDialog(
                                 modifier = Modifier.fillMaxWidth(),
                                 shape = RoundedCornerShape(16.dp)
                             ) {
-                                Text("停止同步并取消", fontWeight = FontWeight.Bold)
+                                Text("停止同步", fontWeight = FontWeight.Bold)
                             }
                         }
                         is NoteViewModel.SyncState.Success -> {
@@ -1812,7 +1848,7 @@ fun CloudSyncDialog(
                                         Icon(Icons.Default.CheckCircle, contentDescription = "成功", tint = Color(0xFF28A745), modifier = Modifier.size(20.dp))
                                         Spacer(modifier = Modifier.width(8.dp))
                                         Text(
-                                            text = "一键同步完成！",
+                                            text = "同步完成",
                                             fontSize = 14.sp,
                                             fontWeight = FontWeight.Bold,
                                             color = Color(0xFF155724)
@@ -1820,19 +1856,22 @@ fun CloudSyncDialog(
                                     }
                                     Spacer(modifier = Modifier.height(8.dp))
                                     Text(
-                                        text = "列表 ${state.listCount} 条 · 本轮处理 ${state.detailSuccessCount} · 失败 ${state.detailFailureCount}",
+                                        text = "共 ${state.listCount} 条便签" +
+                                            if (state.detailFailureCount > 0) "，${state.detailFailureCount} 条未完成" else "",
                                         fontSize = 13.sp,
                                         color = Color(0xFF155724)
                                     )
-                                    Text(
-                                        text = "新缓存图片 ${state.imagesCachedCount} 张 · 待续传 ${state.remainingCount} 条",
-                                        fontSize = 12.sp,
-                                        color = Color(0xFF6C757D)
-                                    )
+                                    if (state.remainingCount > 0) {
+                                        Text(
+                                            text = "还有 ${state.remainingCount} 条可稍后继续同步",
+                                            fontSize = 12.sp,
+                                            color = Color(0xFF6C757D)
+                                        )
+                                    }
                                     if (state.cookieExpired) {
                                         Spacer(modifier = Modifier.height(4.dp))
                                         Text(
-                                            text = "Cookie 已失效，已缓存的图片仍可离线查看。更新 Cookie 后再同步即可续传。",
+                                            text = "登录已过期，请重新登录后再同步。",
                                             fontSize = 12.sp,
                                             color = Color(0xFF856404)
                                         )

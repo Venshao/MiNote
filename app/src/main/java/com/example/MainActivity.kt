@@ -9,6 +9,7 @@ import android.widget.EditText
 import android.widget.ImageButton
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -61,15 +62,23 @@ class MainActivity : AppCompatActivity() {
     private lateinit var titleCollapsed: TextView
     private lateinit var btnToggle: ImageButton
     private lateinit var btnSync: ImageButton
+    private lateinit var headerActions: View
+    private lateinit var selectionBar: View
+    private lateinit var selectionCount: TextView
+    private lateinit var btnSelectAll: TextView
+    private lateinit var btnSelectionStick: TextView
+    private lateinit var btnSelectionDelete: TextView
+    private lateinit var fabAdd: ImageButton
 
     private var backupPassword: String = ""
     private var pendingExportPassword: String? = null
     private var pendingImportPassword: String? = null
     private var showSyncDialog: Boolean = false
-    private var gridMode: Boolean = true
+    private var gridMode: Boolean = true // onCreate 里会按 ViewModel 已持久化的值覆盖
     private var noteItemDecoration: RecyclerView.ItemDecoration? = null
     /** 从编辑页返回后需要滚顶并重排（改色/改内容会更新 modifyDate 顶到第一） */
     private var pendingEditReturnRefresh = false
+    private lateinit var selectionBackCallback: OnBackPressedCallback
 
     private val editNoteLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -157,6 +166,7 @@ class MainActivity : AppCompatActivity() {
             this,
             NoteViewModelFactory(application, repository)
         )[NoteViewModel::class.java]
+        gridMode = viewModel.isGridView.value
 
         recycler = findViewById(R.id.notes_recycler)
         emptyView = findViewById(R.id.empty_view)
@@ -167,8 +177,14 @@ class MainActivity : AppCompatActivity() {
         titleCollapsed = findViewById(R.id.title_notes_collapsed)
         btnToggle = findViewById(R.id.btn_toggle_layout)
         btnSync = findViewById(R.id.btn_sync)
-        val headerActions = findViewById<View>(R.id.header_actions)
-        val fabAdd = findViewById<ImageButton>(R.id.fab_add)
+        headerActions = findViewById(R.id.header_actions)
+        selectionBar = findViewById(R.id.selection_bar)
+        selectionCount = findViewById(R.id.selection_count)
+        btnSelectAll = findViewById(R.id.btn_select_all)
+        btnSelectionStick = findViewById(R.id.btn_selection_stick)
+        btnSelectionDelete = findViewById(R.id.btn_selection_delete)
+        fabAdd = findViewById(R.id.fab_add)
+        val btnSelectionClose = findViewById<ImageButton>(R.id.btn_selection_close)
         val appBar = findViewById<AppBarLayout>(R.id.app_bar)
         // 禁止抬升变色（Material3 默认会变成浅紫容器色）
         appBar.setLiftable(false)
@@ -176,12 +192,19 @@ class MainActivity : AppCompatActivity() {
 
         ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.root)) { _, insets ->
             val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            val topPad = bars.top + (8 * resources.displayMetrics.density).toInt()
             // 右上角按钮贴在状态栏下方，与展开标题同一基线
             headerActions.setPadding(
                 headerActions.paddingLeft,
-                bars.top + (8 * resources.displayMetrics.density).toInt(),
+                topPad,
                 headerActions.paddingRight,
                 headerActions.paddingBottom
+            )
+            selectionBar.setPadding(
+                selectionBar.paddingLeft,
+                topPad,
+                selectionBar.paddingRight,
+                selectionBar.paddingBottom
             )
             fabAdd.translationY = -bars.bottom.toFloat()
             insets
@@ -200,10 +223,10 @@ class MainActivity : AppCompatActivity() {
         }
 
         adapter = NoteListAdapter(
-            onClick = { item ->
+            onOpen = { item ->
                 editNoteLauncher.launch(NoteEditActivity.intent(this, item.id))
             },
-            onLongClick = { item -> showItemActions(item) }
+            onSelectionChanged = { mode, count -> updateSelectionUi(mode, count) }
         )
         adapter.gridMode = gridMode
         recycler.adapter = adapter
@@ -213,6 +236,13 @@ class MainActivity : AppCompatActivity() {
         recycler.itemAnimator = null
         applyLayoutManager(gridMode)
         updateToggleIcon()
+
+        selectionBackCallback = object : OnBackPressedCallback(false) {
+            override fun handleOnBackPressed() {
+                adapter.exitSelection()
+            }
+        }
+        onBackPressedDispatcher.addCallback(this, selectionBackCallback)
 
         searchInput.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
@@ -233,6 +263,25 @@ class MainActivity : AppCompatActivity() {
         fabAdd.setOnClickListener {
             editNoteLauncher.launch(NoteEditActivity.intentNew(this))
         }
+        btnSelectionClose.setOnClickListener { adapter.exitSelection() }
+        btnSelectAll.setOnClickListener {
+            if (adapter.isAllVisibleSelected()) {
+                adapter.exitSelection()
+            } else {
+                adapter.selectAllVisible()
+            }
+        }
+        btnSelectionStick.setOnClickListener {
+            val item = adapter.singleSelectedItem() ?: return@setOnClickListener
+            viewModel.toggleStickyDirectly(item.note)
+            adapter.exitSelection()
+            Toast.makeText(
+                this,
+                if (item.sticky) "已取消置顶" else "已置顶",
+                Toast.LENGTH_SHORT
+            ).show()
+        }
+        btnSelectionDelete.setOnClickListener { confirmBatchDelete() }
 
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
@@ -379,15 +428,35 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun showItemActions(item: NoteListItem) {
-        val stickLabel = if (item.sticky) "取消置顶" else "置顶便签"
+    private fun updateSelectionUi(selectionMode: Boolean, selectedCount: Int) {
+        selectionBar.isVisible = selectionMode
+        headerActions.isVisible = !selectionMode
+        fabAdd.isVisible = !selectionMode
+        selectionBackCallback.isEnabled = selectionMode
+        selectionCount.text = "已选 $selectedCount 项"
+        btnSelectAll.text = if (adapter.isAllVisibleSelected()) "取消全选" else "全选"
+        btnSelectionDelete.isEnabled = selectedCount > 0
+        btnSelectionDelete.alpha = if (selectedCount > 0) 1f else 0.4f
+
+        val single = if (selectedCount == 1) adapter.singleSelectedItem() else null
+        btnSelectionStick.isVisible = single != null
+        if (single != null) {
+            btnSelectionStick.text = if (single.sticky) "取消置顶" else "置顶"
+        }
+    }
+
+    private fun confirmBatchDelete() {
+        val ids = adapter.selectedIds()
+        if (ids.isEmpty()) return
         AlertDialog.Builder(this)
-            .setItems(arrayOf(stickLabel, "删除便签")) { _, which ->
-                when (which) {
-                    0 -> viewModel.toggleStickyDirectly(item.note)
-                    1 -> viewModel.deleteNoteDirectly(item.id)
-                }
+            .setTitle("删除便签")
+            .setMessage("确定删除选中的 ${ids.size} 条便签吗？此操作不可恢复。")
+            .setPositiveButton("删除") { _, _ ->
+                viewModel.deleteNotesDirectly(ids)
+                adapter.exitSelection()
+                Toast.makeText(this, "已删除 ${ids.size} 条", Toast.LENGTH_SHORT).show()
             }
+            .setNegativeButton("取消", null)
             .show()
     }
 
